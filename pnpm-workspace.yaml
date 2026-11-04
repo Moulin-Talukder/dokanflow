@@ -1,0 +1,19 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Dependencies allowed to run install scripts (pnpm blocks them by default).
+allowBuilds:
+  '@prisma/engines': true
+  '@scarf/scarf': false
+  '@swc/core': true
+  esbuild: true
+  msgpackr-extract: true
+  prisma: true
+
+# Versions shared by several workspace packages. Reference with "catalog:".
+catalog:
+  '@types/node': ^24.19.2
+  typescript: ~6.0.3
+  vitest: ^5.1.0
+  zod: ^4.6.7

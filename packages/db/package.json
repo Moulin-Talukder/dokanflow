@@ -1,0 +1,36 @@
+{
+  "name": "@dokanflow/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Prisma schema, migrations and the database client factory.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "generate": "prisma generate",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:status": "prisma migrate status"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "prisma": "^7.10.1",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

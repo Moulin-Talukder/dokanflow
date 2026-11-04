@@ -1,0 +1,35 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalDependencies": ["tsconfig.base.json", "eslint.config.js"],
+  "tasks": {
+    "generate": {
+      "inputs": ["prisma/**", "prisma.config.ts"],
+      "outputs": ["src/generated/**"]
+    },
+    "build": {
+      "dependsOn": ["^build", "generate"],
+      "env": ["NEXT_PUBLIC_API_URL"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build", "generate"]
+    },
+    "lint": {
+      "dependsOn": ["^build", "generate"]
+    },
+    "test": {
+      "dependsOn": ["^build", "generate"],
+      "outputs": ["coverage/**"]
+    },
+    "test:integration": {
+      "dependsOn": ["^build", "generate"],
+      "cache": false,
+      "env": ["DATABASE_URL", "MIGRATION_DATABASE_URL", "REDIS_URL"]
+    },
+    "dev": {
+      "dependsOn": ["^build", "generate"],
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

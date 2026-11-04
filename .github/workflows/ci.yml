@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Placeholder values only. CI never uses real credentials.
+  NEXT_PUBLIC_API_URL: http://localhost:4000/api
+
+jobs:
+  checks:
+    name: Format, lint, type-check, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6 # version comes from "packageManager" in package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  integration:
+    name: Integration tests (Postgres + Redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://app_user:app_ci_only@localhost:5432/dokanflow
+      MIGRATION_DATABASE_URL: postgresql://dokanflow:owner_ci_only@localhost:5432/dokanflow
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Same bootstrap script as local Docker Compose: creates the owner and runtime roles.
+      - name: Create database roles
+        env:
+          PGPASSWORD: postgres_ci_only
+        run: >-
+          psql -h localhost -U postgres -d postgres
+          -v owner_password=owner_ci_only
+          -v app_password=app_ci_only
+          -f infra/postgres/bootstrap.sql
+
+      - name: Apply migrations
+        run: pnpm db:deploy
+
+      - run: pnpm test:integration

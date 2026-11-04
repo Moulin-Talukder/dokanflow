@@ -1,0 +1,42 @@
+name: dokanflow
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: postgres
+      DOKANFLOW_OWNER_PASSWORD: ${DOKANFLOW_OWNER_PASSWORD:?set DOKANFLOW_OWNER_PASSWORD in .env}
+      DOKANFLOW_APP_PASSWORD: ${DOKANFLOW_APP_PASSWORD:?set DOKANFLOW_APP_PASSWORD in .env}
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      # Postgres 18+ images keep data under /var/lib/postgresql/<major>/docker.
+      - postgres-data:/var/lib/postgresql
+      - ./infra/postgres/bootstrap.sql:/opt/dokanflow/bootstrap.sql:ro
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U postgres -d dokanflow']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres-data:
+  redis-data:

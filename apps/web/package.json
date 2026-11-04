@@ -1,0 +1,29 @@
+{
+  "name": "@dokanflow/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev --port 3000",
+    "start": "next start --port 3000",
+    "typecheck": "next typegen && tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dokanflow/shared": "workspace:*",
+    "@tanstack/react-query": "^5.105.3",
+    "next": "16.4.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

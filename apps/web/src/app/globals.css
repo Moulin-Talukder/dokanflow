@@ -1,0 +1,87 @@
+:root {
+  --bg: #f7f7f5;
+  --fg: #1c1c1a;
+  --muted: #6b6b66;
+  --card: #ffffff;
+  --border: #e3e3de;
+  --up: #1f8f4e;
+  --down: #c2410c;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413;
+    --fg: #ececea;
+    --muted: #9b9b95;
+    --card: #1e1e1c;
+    --border: #2f2f2c;
+    --up: #4ade80;
+    --down: #fb923c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  line-height: 1.5;
+}
+
+.container {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 3rem 1rem;
+}
+
+.lead {
+  color: var(--muted);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem 1.25rem;
+}
+
+.card h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.checks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.dot {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+}
+
+.dot-up {
+  background: var(--up);
+}
+
+.dot-down {
+  background: var(--down);
+}

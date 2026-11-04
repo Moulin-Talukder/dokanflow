@@ -1,0 +1,20 @@
+// DokanFlow database schema.
+// The full planned schema is described in docs/SCHEMA.md. Models are added in the
+// roadmap phase that needs them. Phase 1 has no business tables.
+//
+// Conventions: snake_case tables and columns via @@map/@map, UUID ids,
+// timestamptz timestamps, money as integer poisha, tenant_id on every business table.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  // ESM with explicit .js import specifiers, so the generated TS compiles under
+  // module/moduleResolution "NodeNext" like the rest of the monorepo.
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}

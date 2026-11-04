@@ -8,6 +8,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+import { ApiExpressAdapter } from '../src/common/api-express.adapter.js';
 import { parseApiEnv } from '../src/config/env.js';
 
 const rootEnvFile = fileURLToPath(new URL('../../../.env', import.meta.url));
@@ -24,7 +25,7 @@ describe('API (integration)', () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule.forRoot(env)],
     }).compile();
-    app = moduleRef.createNestApplication({ bufferLogs: true });
+    app = moduleRef.createNestApplication(new ApiExpressAdapter(), { bufferLogs: true });
     configureApp(app, env);
     await app.init();
     server = app.getHttpServer() as Server;

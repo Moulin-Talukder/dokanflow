@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import type { ApiError, ApiErrorCode } from '@dokanflow/shared';
+import { mapBodyParserError } from './body-parser-error.js';
 import { RequestValidationException } from './request-validation.exception.js';
 
 const codeByStatus: Partial<Record<number, ApiErrorCode>> = {
@@ -31,15 +32,6 @@ function messageFromHttpException(exception: HttpException): string {
   return exception.message;
 }
 
-/** Errors thrown by Express body parsing (e.g. malformed JSON, body too large). */
-function isBodyParserError(error: unknown): error is { status: number; type: string } {
-  if (typeof error !== 'object' || error === null) {
-    return false;
-  }
-  const { status, type } = error as { status?: unknown; type?: unknown };
-  return typeof status === 'number' && status >= 400 && status < 500 && typeof type === 'string';
-}
-
 export interface ApiErrorResult {
   status: number;
   body: ApiError;
@@ -49,7 +41,10 @@ export interface ApiErrorResult {
  * Maps any thrown value to the single API error shape.
  * Unknown errors become a generic 500 so internal details never reach clients.
  */
-export function toApiError(exception: unknown, requestId?: string): ApiErrorResult {
+export function toApiError(error: unknown, requestId?: string): ApiErrorResult {
+  // ApiExpressAdapter normally maps body-parser errors before filters run; mapping
+  // here as well keeps the output correct for any path that delivers them raw.
+  const exception = mapBodyParserError(error) ?? error;
   let status: number = HttpStatus.INTERNAL_SERVER_ERROR;
   let code: ApiErrorCode = 'INTERNAL_ERROR';
   let message = 'Internal server error';
@@ -68,11 +63,6 @@ export function toApiError(exception: unknown, requestId?: string): ApiErrorResu
     if (status === 503) {
       message = 'Service unavailable';
     }
-  } else if (isBodyParserError(exception)) {
-    status = exception.status;
-    code = codeFor(status);
-    message =
-      exception.type === 'entity.parse.failed' ? 'Malformed JSON body' : 'Invalid request body';
   }
 
   return {

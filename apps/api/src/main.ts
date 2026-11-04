@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { configureApp } from './app.setup.js';
+import { ApiExpressAdapter } from './common/api-express.adapter.js';
 import { EnvValidationError, parseApiEnv } from './config/env.js';
 import { loadRootEnvFile } from './config/load-env-file.js';
 
@@ -19,7 +20,9 @@ async function bootstrap(): Promise<void> {
     throw error;
   }
 
-  const app = await NestFactory.create(AppModule.forRoot(env), { bufferLogs: true });
+  const app = await NestFactory.create(AppModule.forRoot(env), new ApiExpressAdapter(), {
+    bufferLogs: true,
+  });
   configureApp(app, env);
   await app.listen(env.API_PORT);
 }

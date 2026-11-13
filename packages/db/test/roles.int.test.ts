@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPrismaClient, type PrismaClient } from '../src/index.js';
-import { requireEnv } from './env.js';
+import { assertConnectedToTestDatabase } from '../src/testing.js';
+import { testTargets } from './env.js';
 
 interface RoleRow {
   current_user: string;
@@ -18,12 +19,14 @@ describe('database roles', () => {
   let app: PrismaClient;
   let owner: PrismaClient;
 
-  beforeAll(() => {
-    app = createPrismaClient({ connectionString: requireEnv('DATABASE_URL'), maxConnections: 2 });
+  beforeAll(async () => {
+    app = createPrismaClient({ connectionString: testTargets.databaseUrl, maxConnections: 2 });
     owner = createPrismaClient({
-      connectionString: requireEnv('MIGRATION_DATABASE_URL'),
+      connectionString: testTargets.migrationDatabaseUrl,
       maxConnections: 2,
     });
+    await assertConnectedToTestDatabase(app);
+    await assertConnectedToTestDatabase(owner);
   });
 
   afterAll(async () => {

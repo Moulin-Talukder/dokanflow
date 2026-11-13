@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { CSRF_HEADER } from '@dokanflow/shared';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import type { ApiEnv } from './config/env.js';
@@ -17,6 +18,7 @@ export function configureApp(app: INestApplication, env: ApiEnv): void {
   app.enableCors({
     origin: env.API_CORS_ORIGINS,
     credentials: true,
+    allowedHeaders: ['content-type', 'authorization', CSRF_HEADER, 'x-request-id'],
     exposedHeaders: ['x-request-id'],
   });
   app.enableShutdownHooks();
@@ -26,7 +28,9 @@ export function configureApp(app: INestApplication, env: ApiEnv): void {
     new DocumentBuilder()
       .setTitle('DokanFlow API')
       .setDescription('Multi-tenant POS and inventory API')
-      .setVersion('0.1.0')
+      .setVersion('0.2.0')
+      .addBearerAuth()
+      .addCookieAuth('dokanflow_rt')
       .build(),
   );
   SwaggerModule.setup(`${API_PREFIX}/docs`, app, document, {

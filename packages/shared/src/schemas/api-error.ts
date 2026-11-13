@@ -6,6 +6,8 @@ export const apiErrorCodeSchema = z.enum([
   'VALIDATION_FAILED',
   'UNAUTHORIZED',
   'FORBIDDEN',
+  /** The user must change a temporary password before doing anything else. */
+  'PASSWORD_CHANGE_REQUIRED',
   'NOT_FOUND',
   'CONFLICT',
   'TOO_MANY_REQUESTS',

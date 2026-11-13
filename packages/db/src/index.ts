@@ -2,6 +2,15 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from './generated/prisma/client.js';
 
 export { Prisma, PrismaClient } from './generated/prisma/client.js';
+export type { Branch, Membership, RefreshToken, Tenant, User } from './generated/prisma/client.js';
+export { MembershipRole, TenantStatus, UserStatus } from './generated/prisma/enums.js';
+export {
+  InvalidDbContextError,
+  withDbContext,
+  type DbContext,
+  type TransactionClient,
+  type WithDbContextOptions,
+} from './context.js';
 
 export interface CreatePrismaClientOptions {
   /** Postgres connection string. Runtime services must connect as app_user, not the schema owner. */

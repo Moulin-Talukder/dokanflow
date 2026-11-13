@@ -67,9 +67,13 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
-      DATABASE_URL: postgresql://app_user:app_ci_only@localhost:5432/dokanflow
-      MIGRATION_DATABASE_URL: postgresql://dokanflow:owner_ci_only@localhost:5432/dokanflow
-      REDIS_URL: redis://localhost:6379
+      # Integration tests read only TEST_* settings, and refuse any database whose
+      # name does not end in "_test". Throwaway values for the CI run only.
+      TEST_DATABASE_URL: postgresql://app_user:app_ci_only@localhost:5432/dokanflow_test
+      TEST_MIGRATION_DATABASE_URL: postgresql://dokanflow:owner_ci_only@localhost:5432/dokanflow_test
+      TEST_REDIS_URL: redis://localhost:6379/1
+      JWT_ACCESS_SECRET: ci-only-jwt-secret-0123456789abcdefghijkl
+      API_CORS_ORIGINS: http://localhost:3000
     steps:
       - uses: actions/checkout@v7
 
@@ -82,7 +86,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Same bootstrap script as local Docker Compose: creates the owner and runtime roles.
+      # Same bootstrap script as local Docker Compose: creates the owner and runtime
+      # roles, the development database and the dokanflow_test database.
       - name: Create database roles
         env:
           PGPASSWORD: postgres_ci_only
@@ -92,7 +97,7 @@ jobs:
           -v app_password=app_ci_only
           -f infra/postgres/bootstrap.sql
 
-      - name: Apply migrations
-        run: pnpm db:deploy
+      - name: Apply migrations to the test database
+        run: pnpm db:test:deploy
 
       - run: pnpm test:integration

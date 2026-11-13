@@ -24,7 +24,19 @@
     "test:integration": {
       "dependsOn": ["^build", "generate"],
       "cache": false,
-      "env": ["DATABASE_URL", "MIGRATION_DATABASE_URL", "REDIS_URL"]
+      "env": [
+        "TEST_DATABASE_URL",
+        "TEST_MIGRATION_DATABASE_URL",
+        "TEST_REDIS_URL",
+        "DATABASE_URL",
+        "MIGRATION_DATABASE_URL",
+        "REDIS_URL",
+        "JWT_ACCESS_SECRET",
+        "API_CORS_ORIGINS",
+        "AUTH_COOKIE_SECURE",
+        "AUTH_COOKIE_SAMESITE",
+        "AUTH_COOKIE_DOMAIN"
+      ]
     },
     "dev": {
       "dependsOn": ["^build", "generate"],

@@ -2,6 +2,10 @@ packages:
   - apps/*
   - packages/*
 
+# Refuse to install on a Node version outside package.json "engines" (the API needs
+# node:crypto argon2, added in Node 24.7; the Nest CLI needs 24.15+).
+engineStrict: true
+
 # Dependencies allowed to run install scripts (pnpm blocks them by default).
 allowBuilds:
   '@prisma/engines': true

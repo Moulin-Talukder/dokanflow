@@ -4,6 +4,7 @@ import { EnvValidationError, parseApiEnv } from './env.js';
 const valid = {
   DATABASE_URL: 'postgresql://app_user:secret@localhost:5432/dokanflow',
   REDIS_URL: 'redis://localhost:6379',
+  JWT_ACCESS_SECRET: 'a'.repeat(32),
 };
 
 describe('parseApiEnv', () => {
@@ -14,6 +15,10 @@ describe('parseApiEnv', () => {
       LOG_LEVEL: 'info',
       API_PORT: 4000,
       API_CORS_ORIGINS: [],
+      JWT_ACCESS_TTL_SECONDS: 900,
+      REFRESH_TOKEN_TTL_DAYS: 30,
+      AUTH_COOKIE_SECURE: false,
+      AUTH_COOKIE_SAMESITE: 'strict',
     });
   });
 
@@ -56,5 +61,55 @@ describe('parseApiEnv', () => {
       expect(error).toBeInstanceOf(EnvValidationError);
       expect(String(error)).not.toContain(secret);
     }
+  });
+
+  it('requires a JWT secret of at least 32 characters', () => {
+    expect(() => parseApiEnv({ ...valid, JWT_ACCESS_SECRET: undefined })).toThrow(
+      /JWT_ACCESS_SECRET/,
+    );
+    expect(() => parseApiEnv({ ...valid, JWT_ACCESS_SECRET: 'short' })).toThrow(
+      /JWT_ACCESS_SECRET/,
+    );
+  });
+
+  describe('auth cookie settings', () => {
+    const production = {
+      ...valid,
+      NODE_ENV: 'production',
+      API_CORS_ORIGINS: 'https://app.example.com',
+    };
+
+    it('defaults Secure to true in production and false in development', () => {
+      expect(parseApiEnv(production).AUTH_COOKIE_SECURE).toBe(true);
+      expect(parseApiEnv(valid).AUTH_COOKIE_SECURE).toBe(false);
+    });
+
+    it('refuses to start in production with Secure turned off', () => {
+      expect(() => parseApiEnv({ ...production, AUTH_COOKIE_SECURE: 'false' })).toThrow(
+        /AUTH_COOKIE_SECURE: Must be true in production/,
+      );
+    });
+
+    it('refuses SameSite=None without Secure', () => {
+      expect(() => parseApiEnv({ ...valid, AUTH_COOKIE_SAMESITE: 'none' })).toThrow(
+        /SameSite=None requires/,
+      );
+      expect(
+        parseApiEnv({ ...valid, AUTH_COOKIE_SAMESITE: 'none', AUTH_COOKIE_SECURE: 'true' })
+          .AUTH_COOKIE_SAMESITE,
+      ).toBe('none');
+    });
+
+    it('requires an explicit web origin in production', () => {
+      expect(() => parseApiEnv({ ...production, API_CORS_ORIGINS: '' })).toThrow(
+        /API_CORS_ORIGINS/,
+      );
+    });
+
+    it('rejects values that are not exactly true or false', () => {
+      expect(() => parseApiEnv({ ...valid, AUTH_COOKIE_SECURE: 'yes' })).toThrow(
+        /AUTH_COOKIE_SECURE/,
+      );
+    });
   });
 });

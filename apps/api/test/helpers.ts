@@ -13,6 +13,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import { PrismaService } from '../src/infra/prisma.service.js';
+import { RedisService } from '../src/infra/redis.service.js';
 import { ApiExpressAdapter } from '../src/common/api-express.adapter.js';
 import { type ApiEnv, parseApiEnv } from '../src/config/env.js';
 
@@ -33,18 +34,26 @@ export interface TestApp {
  */
 const targets = resolveIntegrationTestTargets(process.env);
 
+/** Settings a test may choose. The database, Redis, NODE_ENV and logging are fixed. */
+export type TestAppOverrides = Partial<
+  Record<Exclude<keyof ApiEnv, 'DATABASE_URL' | 'REDIS_URL' | 'NODE_ENV' | 'LOG_LEVEL'>, string>
+>;
+
 /**
  * Boots the real application (same module, adapter and setup as main.ts) against
- * the test database. Rate limits are scaled up and namespaced per app instance, so
- * flow tests sharing 127.0.0.1 do not trip them; the rate-limit tests pass
- * `{ RATE_LIMIT_SCALE: '1' }` to exercise the real limits.
+ * the test database.
+ *
+ * The app's configuration never comes from the developer's .env or shell: only
+ * the guarded TEST_* database and Redis targets are read from the environment.
+ * Everything else is set here or left at the schema default, so tests behave the
+ * same on every machine and in CI. Rate limits are scaled up (flow tests share
+ * 127.0.0.1) and namespaced per app; rate-limit tests pass `{ RATE_LIMIT_SCALE: '1' }`.
  */
-export async function createTestApp(overrides: Record<string, string> = {}): Promise<TestApp> {
+export async function createTestApp(overrides: TestAppOverrides = {}): Promise<TestApp> {
   const env = parseApiEnv({
     JWT_ACCESS_SECRET: 'Pq8Wn3Zx6Lt1Rb9Kv4Hy7Dm2Sf5Gc0Ju3Ne8Ta6Xo1Ql4Vi',
     API_CORS_ORIGINS: 'http://localhost:3000',
     RATE_LIMIT_SCALE: '1000',
-    ...process.env,
     RATE_LIMIT_KEY_PREFIX: `rl-test-${randomUUID().slice(0, 8)}`,
     ...overrides,
     DATABASE_URL: targets.databaseUrl,
@@ -59,6 +68,26 @@ export async function createTestApp(overrides: Record<string, string> = {}): Pro
   // Confirm with the server itself before any test sends a request.
   await assertConnectedToTestDatabase(app.get(PrismaService).client);
   return { app, server: app.getHttpServer() as Server, env };
+}
+
+/**
+ * Deletes this app's rate-limit counters. Call in beforeEach so no test inherits
+ * another test's attempts (all tests share 127.0.0.1 and the app's key prefix).
+ */
+export async function resetRateLimits({ app, env }: TestApp): Promise<void> {
+  const redis = app.get(RedisService).client;
+  let cursor = '0';
+  do {
+    const [next, keys] = await redis.scan(
+      cursor,
+      'MATCH',
+      `${env.RATE_LIMIT_KEY_PREFIX}:*`,
+      'COUNT',
+      500,
+    );
+    if (keys.length > 0) await redis.del(...keys);
+    cursor = next;
+  } while (cursor !== '0');
 }
 
 export const CSRF = { 'x-dokanflow-csrf': '1' } as const;

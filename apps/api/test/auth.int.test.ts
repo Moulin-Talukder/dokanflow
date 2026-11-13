@@ -3,13 +3,15 @@ import type { Server } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { apiErrorSchema, sessionSchema, staffListResponseSchema } from '@dokanflow/shared';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   CSRF,
   createTestApp,
   login,
   refreshCookie,
   registerOwner,
+  resetRateLimits,
+  type TestApp,
   toSession,
   uniqueEmail,
   uniquePhone,
@@ -20,11 +22,17 @@ import {
  * Every flow goes through HTTP, guards, services and the database.
  */
 describe('auth, tenants and RBAC (integration)', () => {
+  let testApp: TestApp;
   let app: INestApplication;
   let server: Server;
 
   beforeAll(async () => {
-    ({ app, server } = await createTestApp());
+    testApp = await createTestApp();
+    ({ app, server } = testApp);
+  });
+
+  beforeEach(async () => {
+    await resetRateLimits(testApp);
   });
 
   afterAll(async () => {
@@ -289,21 +297,21 @@ describe('auth, tenants and RBAC (integration)', () => {
       const manager = await createManager(owner.accessToken);
       const cashier = await createCashier(owner.accessToken);
 
+      // Each login completes before the next request starts: supertest gives every
+      // request on a non-listening server its own temporary listener.
+      const managerFirstLogin = await login(server, manager.email, manager.temporaryPassword);
       const asManager = toSession(
         await request(server)
           .post('/api/auth/change-password')
-          .set(
-            ...bearer((await login(server, manager.email, manager.temporaryPassword)).accessToken),
-          )
+          .set(...bearer(managerFirstLogin.accessToken))
           .send({ currentPassword: manager.temporaryPassword, newPassword: 'manager-password' })
           .expect(200),
       );
+      const cashierFirstLogin = await login(server, cashier.phone, cashier.temporaryPassword);
       const asCashier = toSession(
         await request(server)
           .post('/api/auth/change-password')
-          .set(
-            ...bearer((await login(server, cashier.phone, cashier.temporaryPassword)).accessToken),
-          )
+          .set(...bearer(cashierFirstLogin.accessToken))
           .send({ currentPassword: cashier.temporaryPassword, newPassword: 'cashier-password' })
           .expect(200),
       );

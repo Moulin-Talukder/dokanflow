@@ -3,7 +3,7 @@ import type { Server } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
 import { apiErrorSchema } from '@dokanflow/shared';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service.js';
 import { RedisService } from '../src/infra/redis.service.js';
 import { RATE_LIMIT_POLICIES } from '../src/rate-limit/rate-limit.policies.js';
@@ -13,6 +13,8 @@ import {
   login,
   refreshCookie,
   registerOwner,
+  resetRateLimits,
+  type TestApp,
   toSession,
   uniqueEmail,
   uniquePhone,
@@ -23,13 +25,19 @@ import {
  * (sessions, revocation, managed accounts) and real Redis (rate limits).
  */
 describe('security review fixes (integration)', () => {
+  let testApp: TestApp;
   let app: INestApplication;
   let server: Server;
   let prisma: PrismaService;
 
   beforeAll(async () => {
-    ({ app, server } = await createTestApp());
+    testApp = await createTestApp();
+    ({ app, server } = testApp);
     prisma = app.get(PrismaService);
+  });
+
+  beforeEach(async () => {
+    await resetRateLimits(testApp);
   });
 
   afterAll(async () => {
@@ -235,16 +243,23 @@ describe('security review fixes (integration)', () => {
 });
 
 describe('rate limiting with real Redis (finding 2)', () => {
+  let testApp: TestApp;
   let app: INestApplication;
   let server: Server;
   let redis: RedisService;
   let prefix: string;
+  /** Limited by the first test; used to prove the next test starts from zero. */
+  let limitedOwner: Awaited<ReturnType<typeof registerOwner>>;
 
   beforeAll(async () => {
-    const created = await createTestApp({ RATE_LIMIT_SCALE: '1' });
-    ({ app, server } = created);
-    prefix = created.env.RATE_LIMIT_KEY_PREFIX;
+    testApp = await createTestApp({ RATE_LIMIT_SCALE: '1' });
+    ({ app, server } = testApp);
+    prefix = testApp.env.RATE_LIMIT_KEY_PREFIX;
     redis = app.get(RedisService);
+  });
+
+  beforeEach(async () => {
+    await resetRateLimits(testApp);
   });
 
   afterAll(async () => {
@@ -253,6 +268,7 @@ describe('rate limiting with real Redis (finding 2)', () => {
 
   it('blocks an identifier after its limit, with Retry-After, without blocking others', async () => {
     const owner = await registerOwner(server, 'limited');
+    limitedOwner = owner;
     const attempts = RATE_LIMIT_POLICIES.login.perIdentifier;
     for (let i = 0; i < attempts; i++) {
       await request(server)
@@ -277,7 +293,19 @@ describe('rate limiting with real Redis (finding 2)', () => {
     await login(server, other.email, other.password);
   });
 
+  it('starts every test with fresh counters (no leaks between tests)', async () => {
+    // The previous test locked this account; beforeEach cleared this app's counters.
+    expect(await redis.client.keys(`${prefix}:*`)).toEqual([]);
+    await login(server, limitedOwner.email, limitedOwner.password);
+  });
+
   it('keeps counters in Redis with an expiry, keyed by hashes not raw identifiers', async () => {
+    const owner = await registerOwner(server, 'counters');
+    await request(server)
+      .post('/api/auth/login')
+      .set(CSRF)
+      .send({ identifier: owner.email, password: 'wrong-password' })
+      .expect(401);
     const keys = await redis.client.keys(`${prefix}:login:*`);
     expect(keys.length).toBeGreaterThan(0);
     for (const key of keys) {

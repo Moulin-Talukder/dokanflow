@@ -19,6 +19,8 @@
     "db:generate": "pnpm --filter @dokanflow/db generate",
     "db:migrate": "pnpm --filter @dokanflow/db migrate:dev",
     "db:deploy": "pnpm --filter @dokanflow/db migrate:deploy",
+    "db:test:create": "docker compose exec -T postgres psql -U postgres -d postgres -f /opt/dokanflow/test-database.sql",
+    "db:test:deploy": "pnpm --filter @dokanflow/db migrate:deploy:test",
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down"
   },

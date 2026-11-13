@@ -1,34 +1,16 @@
-import { existsSync } from 'node:fs';
-import type { Server } from 'node:http';
-import { fileURLToPath } from 'node:url';
 import type { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
+import type { Server } from 'node:http';
 import { apiErrorSchema, readinessResponseSchema } from '@dokanflow/shared';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AppModule } from '../src/app.module.js';
-import { configureApp } from '../src/app.setup.js';
-import { ApiExpressAdapter } from '../src/common/api-express.adapter.js';
-import { parseApiEnv } from '../src/config/env.js';
-
-const rootEnvFile = fileURLToPath(new URL('../../../.env', import.meta.url));
-if (existsSync(rootEnvFile)) {
-  process.loadEnvFile(rootEnvFile);
-}
+import { createTestApp } from './helpers.js';
 
 describe('API (integration)', () => {
   let app: INestApplication;
   let server: Server;
 
   beforeAll(async () => {
-    const env = parseApiEnv({ ...process.env, NODE_ENV: 'test', LOG_LEVEL: 'silent' });
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule.forRoot(env)],
-    }).compile();
-    app = moduleRef.createNestApplication(new ApiExpressAdapter(), { bufferLogs: true });
-    configureApp(app, env);
-    await app.init();
-    server = app.getHttpServer() as Server;
+    ({ app, server } = await createTestApp());
   });
 
   afterAll(async () => {

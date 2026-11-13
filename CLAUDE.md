@@ -22,10 +22,11 @@ Multi-tenant POS and inventory SaaS for small Bangladeshi retail businesses (dok
 - **Prisma 7.10.x:** stable. The `prisma` CLI's `latest` dist-tag points at an 8.0 release candidate.
 - **NestJS 12** (ESM-only), **Next.js 16**, **BullMQ 6**, **ioredis 6**, **Zod 4**, **Vitest 5**.
 - pnpm enforces a minimum release age. Prefer the previous patch release over adding `minimumReleaseAgeExclude` entries.
+- **Node 24.15+** (`engines`, enforced by `engineStrict` in `pnpm-workspace.yaml`). Password hashing uses `node:crypto` Argon2, added in Node 24.7; the API checks for it at startup. Phase 8 Dockerfiles must use a `node:24` image at 24.15 or later.
 
 ### Commands
 
-`pnpm check` (format, lint, type-check, unit tests) · `pnpm build` · `pnpm test:integration` (needs `pnpm infra:up && pnpm db:deploy`) · `pnpm db:migrate` · `pnpm dev`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). The planned schema is in [docs/SCHEMA.md](docs/SCHEMA.md).
+`pnpm check` (format, lint, type-check, unit tests) · `pnpm build` · `pnpm test:integration` (needs `pnpm infra:up && pnpm db:test:deploy`; uses only the `*_test` database via `TEST_*` variables) · `pnpm db:migrate` · `pnpm dev`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). The planned schema is in [docs/SCHEMA.md](docs/SCHEMA.md).
 
 ### Code conventions established in Phase 1
 
@@ -33,6 +34,21 @@ Multi-tenant POS and inventory SaaS for small Bangladeshi retail businesses (dok
 - API env is validated by `parseApiEnv` (`apps/api/src/config/env.ts`) and injected with `@Inject(APP_CONFIG)`. Never read `process.env` inside feature code.
 - Request input is validated with `new ZodValidationPipe(schemaFromShared)`. Errors are rendered by `ApiExceptionFilter` in the `apiErrorSchema` shape, including `requestId`.
 - API unit tests run through SWC (`unplugin-swc`) for decorator metadata. Integration tests are `test/**/*.int.test.ts` and use real Postgres and Redis.
+
+### Code conventions established in Phase 2
+
+- **Tenant-scoped queries** go through `withDbContext(prisma.client, { tenantId, userId }, (tx) => ...)` from `@dokanflow/db`. It sets `app.tenant_id`/`app.user_id` transaction-locally. Without it, RLS hides every tenant row (fails closed).
+- **Every route requires a valid access token** unless marked `@Public()`. Global guards run in order: `JwtAuthGuard` → `TenantContextGuard` (re-reads the membership from the DB on every request) → `PermissionsGuard`. Protect routes with `@RequirePermission('x:y')`, using permissions from `ROLE_PERMISSIONS` in `packages/shared`. Read the caller with `@CurrentAuth()`.
+- **The first-login gate:** routes return 403 `PASSWORD_CHANGE_REQUIRED` while a temporary password is in use, unless marked `@AllowWhilePasswordChangeRequired()`.
+- **CSRF:** endpoints that read the refresh cookie use `@UseGuards(CsrfGuard)` (custom header plus Origin check).
+- **Global tables** (`users`, `tenants`, `refresh_tokens`) are touched only by the auth, tenant and staff services. Never return `password_hash` or `token_hash`.
+- **Validation messages** in shared Zod schemas are keys (`validation.*`). The API maps them to English; the web app translates them.
+- **Web text** always goes through `useT()` (or `createTranslator` on the server) with keys in `apps/web/src/i18n/messages/en.ts`. Never hard-code UI strings.
+- **Web API calls** go through `useAuth().client.request(...)`. The access token is kept in memory only, and refreshes are single-flight and serialized across tabs.
+- **Sessions:** access tokens carry `sid`; `TenantContextGuard` rejects tokens whose `auth_sessions` row is revoked or expired. To end someone's access, revoke sessions (in the same transaction as the change that requires it); never compare timestamps.
+- **Never use a shop id from the request as RLS context.** Check membership with `MembershipLookup.findOwn()` (user context only) first.
+- **Password hashing** goes through the `PasswordHasher` service (concurrency-capped), never the raw functions.
+- **Rate-limited endpoints** use `@UseGuards(RateLimitGuard)` with `@RateLimit('<policy>')` from `RATE_LIMIT_POLICIES`. Login and register also require the CSRF header.
 
 ## Core rules (non-negotiable)
 
@@ -119,7 +135,7 @@ apps/web (Next.js) ──HTTPS/JSON──▶ apps/api (NestJS) ──▶ Postgre
 - Database: snake_case tables and columns, mapped to camelCase in Prisma with `@map`/`@@map`.
 - IDs: UUID. Timestamps: `timestamptz`, stored in UTC and displayed in Asia/Dhaka.
 - API errors use one consistent JSON shape. List endpoints are paginated.
-- Tests: unit tests for pure logic. Integration tests hit a real Postgres instance in Docker or CI. Do not mock the database for RLS or concurrency tests.
+- Tests: unit tests for pure logic. Integration tests hit a real Postgres instance in Docker or CI. Do not mock the database for RLS or concurrency tests. Integration tests must get their connections from `resolveIntegrationTestTargets()` (`@dokanflow/db/testing`), never from `DATABASE_URL`/`REDIS_URL`.
 
 ## Git push rules (always follow before every push)
 

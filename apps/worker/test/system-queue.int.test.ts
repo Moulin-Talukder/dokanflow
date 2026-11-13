@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { resolveIntegrationTestTargets } from '@dokanflow/db/testing';
 import { Queue, QueueEvents } from 'bullmq';
 import { Redis } from 'ioredis';
 import { pino } from 'pino';
@@ -14,7 +15,9 @@ if (existsSync(rootEnvFile)) {
 }
 
 describe('system queue (integration)', () => {
-  const env = parseWorkerEnv({ ...process.env, NODE_ENV: 'test', LOG_LEVEL: 'silent' });
+  // A separate Redis database, so a locally running worker cannot take the test jobs.
+  const { redisUrl } = resolveIntegrationTestTargets(process.env);
+  const env = parseWorkerEnv({ REDIS_URL: redisUrl, NODE_ENV: 'test', LOG_LEVEL: 'silent' });
   const connection = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   const queue = new Queue(SYSTEM_QUEUE, { connection });
   const events = new QueueEvents(SYSTEM_QUEUE, { connection: { url: env.REDIS_URL } });

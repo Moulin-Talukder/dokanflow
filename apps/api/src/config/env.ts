@@ -1,8 +1,11 @@
 import { z } from 'zod';
+import { weakSecretReason } from './secret-strength.js';
 
 const originSchema = z.url({ protocol: /^https?$/ }).transform((value) => new URL(value).origin);
 
-export const apiEnvSchema = z.object({
+const booleanString = z.enum(['true', 'false']).transform((value) => value === 'true');
+
+const apiEnvObjectSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
@@ -20,9 +23,80 @@ export const apiEnvSchema = z.object({
   /** Runtime connection. Must use the app_user role, never the schema owner. */
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
+
+  /** HMAC key for access tokens (HS256). At least 32 characters of random data. */
+  JWT_ACCESS_SECRET: z.string().min(32, 'Must be at least 32 characters'),
+  JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
+  /** Idle lifetime of a refresh token. Each rotation issues a new one, capped by the session. */
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(14),
+  /** Absolute lifetime of a login session. Rotation never extends it. */
+  SESSION_MAX_AGE_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  /** Argon2 hashes allowed to run at once (~19 MiB each). */
+  PASSWORD_HASH_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+  /** Password operations allowed to wait for a slot; beyond this, 503. */
+  PASSWORD_HASH_QUEUE: z.coerce.number().int().min(0).max(10_000).default(32),
+  /** Multiplies every rate limit (tests use a large value). 1 in production. */
+  RATE_LIMIT_SCALE: z.coerce.number().int().min(1).max(100_000).default(1),
+  /** Prefix for rate-limit keys in Redis (tests use a unique one per run). */
+  RATE_LIMIT_KEY_PREFIX: z
+    .string()
+    .regex(/^[a-z0-9:_-]{1,40}$/)
+    .default('rl'),
+  /** Defaults to true in production and false elsewhere (http://localhost). */
+  AUTH_COOKIE_SECURE: booleanString.optional(),
+  /**
+   * strict: web and API on the same site (e.g. app.example.com + api.example.com,
+   * or localhost:3000 + localhost:4000). none: different sites; requires Secure.
+   */
+  AUTH_COOKIE_SAMESITE: z.enum(['strict', 'lax', 'none']).default('strict'),
+  /** Optional cookie Domain. Leave unset to scope the cookie to the API host only. */
+  AUTH_COOKIE_DOMAIN: z.string().trim().min(1).optional(),
 });
 
-export type ApiEnv = z.infer<typeof apiEnvSchema>;
+/** Insecure combinations are rejected at boot rather than discovered in a browser. */
+export const apiEnvSchema = apiEnvObjectSchema
+  .transform((env) => ({
+    ...env,
+    AUTH_COOKIE_SECURE: env.AUTH_COOKIE_SECURE ?? env.NODE_ENV === 'production',
+  }))
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV === 'production') {
+      const reason = weakSecretReason(env.JWT_ACCESS_SECRET);
+      if (reason) {
+        ctx.addIssue({ code: 'custom', path: ['JWT_ACCESS_SECRET'], message: reason });
+      }
+      if (env.RATE_LIMIT_SCALE !== 1) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['RATE_LIMIT_SCALE'],
+          message: 'Must be 1 in production',
+        });
+      }
+    }
+    if (env.NODE_ENV === 'production' && !env.AUTH_COOKIE_SECURE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AUTH_COOKIE_SECURE'],
+        message: 'Must be true in production',
+      });
+    }
+    if (env.AUTH_COOKIE_SAMESITE === 'none' && !env.AUTH_COOKIE_SECURE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AUTH_COOKIE_SAMESITE'],
+        message: 'SameSite=None requires AUTH_COOKIE_SECURE=true',
+      });
+    }
+    if (env.NODE_ENV === 'production' && env.API_CORS_ORIGINS.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['API_CORS_ORIGINS'],
+        message: 'Must list the web app origin in production (needed for CSRF checks)',
+      });
+    }
+  });
+
+export type ApiEnv = z.output<typeof apiEnvSchema>;
 
 export class EnvValidationError extends Error {
   constructor(readonly problems: readonly string[]) {

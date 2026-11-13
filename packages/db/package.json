@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
     }
   },
   "files": [
@@ -18,10 +22,13 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
+    "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "migrate:status": "prisma migrate status"
+    "migrate:status": "prisma migrate status",
+    "migrate:deploy:test": "PRISMA_TARGET=test prisma migrate deploy",
+    "migrate:status:test": "PRISMA_TARGET=test prisma migrate status"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",

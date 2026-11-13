@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import type { ApiError, ApiErrorCode } from '@dokanflow/shared';
+import { ApiHttpException } from './api-http.exception.js';
 import { mapBodyParserError } from './body-parser-error.js';
 import { RequestValidationException } from './request-validation.exception.js';
 
@@ -57,7 +58,7 @@ export function toApiError(error: unknown, requestId?: string): ApiErrorResult {
     issues = [...exception.issues];
   } else if (exception instanceof HttpException) {
     status = exception.getStatus();
-    code = codeFor(status);
+    code = exception instanceof ApiHttpException ? exception.code : codeFor(status);
     // Messages of 5xx HttpExceptions can carry internals; keep them server-side.
     message = status >= 500 ? message : messageFromHttpException(exception);
     if (status === 503) {

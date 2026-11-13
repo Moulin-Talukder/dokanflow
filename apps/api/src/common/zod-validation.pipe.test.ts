@@ -1,3 +1,4 @@
+import { registerRequestSchema } from '@dokanflow/shared';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { RequestValidationException } from './request-validation.exception.js';
@@ -27,6 +28,23 @@ describe('ZodValidationPipe', () => {
       expect(error).toBeInstanceOf(RequestValidationException);
       const paths = (error as RequestValidationException).issues.map((i) => i.path);
       expect(paths).toEqual(['name', 'page']);
+    }
+  });
+
+  it('turns shared validation keys into English messages', () => {
+    const shared = new ZodValidationPipe(registerRequestSchema);
+    try {
+      shared.transform({
+        businessName: 'Shop',
+        name: 'Owner',
+        email: 'o@x.test',
+        password: 'short',
+      });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as RequestValidationException).issues).toEqual([
+        { path: 'password', message: 'Use at least 10 characters' },
+      ]);
     }
   });
 });

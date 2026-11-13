@@ -12,10 +12,12 @@ import {
   type ReadinessResponse,
 } from '@dokanflow/shared';
 import type { Response } from 'express';
+import { Public } from '../auth/decorators.js';
 import { toOpenApiSchema } from '../common/openapi.js';
 import { HealthService } from './health.service.js';
 
 @ApiTags('health')
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly health: HealthService) {}

@@ -6,8 +6,8 @@
 // timestamptz timestamps, money as integer poisha, tenant_id on every business table.
 
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
   // ESM with explicit .js import specifiers, so the generated TS compiles under
   // module/moduleResolution "NodeNext" like the rest of the monorepo.
   moduleFormat           = "esm"
@@ -17,4 +17,164 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: auth, tenants and RBAC
+// RLS policies, CHECK constraints and partial indexes that Prisma cannot express
+// live in the migration SQL. See docs/SCHEMA.md.
+// ---------------------------------------------------------------------------
+
+enum MembershipRole {
+  owner
+  manager
+  cashier
+
+  @@map("membership_role")
+}
+
+enum UserStatus {
+  active
+  disabled
+
+  @@map("user_status")
+}
+
+enum TenantStatus {
+  active
+  suspended
+
+  @@map("tenant_status")
+}
+
+/// Global identity (no RLS). Accessed only through the API's auth and user services.
+model User {
+  id                 String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String
+  /// Lowercased. Owners and managers sign in with it.
+  email              String?    @unique
+  /// Normalized E.164 (+8801XXXXXXXXX). Cashiers sign in with it.
+  phone              String?    @unique
+  passwordHash       String     @map("password_hash")
+  mustChangePassword Boolean    @default(false) @map("must_change_password")
+  /// Informational only. Revocation uses auth_sessions, not timestamps (no clock-skew issues).
+  passwordChangedAt  DateTime   @default(now()) @map("password_changed_at") @db.Timestamptz(3)
+  status             UserStatus @default(active)
+  /// Set when an owner created this account as staff; only that shop may reset its password.
+  /// Cleared when the person creates their own business (the account is then self-managed).
+  managedByTenantId  String?    @map("managed_by_tenant_id") @db.Uuid
+  /// The shop selected at the last login or switch.
+  lastTenantId       String?    @map("last_tenant_id") @db.Uuid
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  managedByTenant Tenant?        @relation("ManagedUsers", fields: [managedByTenantId], references: [id], onDelete: Restrict)
+  lastTenant      Tenant?        @relation("LastTenant", fields: [lastTenantId], references: [id], onDelete: SetNull)
+  memberships     Membership[]
+  refreshTokens   RefreshToken[]
+  sessions        AuthSession[]
+
+  @@map("users")
+}
+
+/// A business. Global (no RLS); members reach it through their memberships.
+model Tenant {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  status    TenantStatus @default(active)
+  timezone  String       @default("Asia/Dhaka")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  branches      Branch[]
+  memberships   Membership[]
+  refreshTokens RefreshToken[]
+  managedUsers  User[]         @relation("ManagedUsers")
+  lastUsers     User[]         @relation("LastTenant")
+
+  @@map("tenants")
+}
+
+/// Tenant-scoped (RLS).
+/// One default branch per tenant: `is_default` is TRUE or NULL (a CHECK forbids FALSE), and
+/// the unique (tenant_id, is_default) allows any number of NULLs but only one TRUE. This
+/// avoids a partial index, which the Prisma schema cannot describe.
+model Branch {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  /// TRUE for the default branch, NULL otherwise.
+  isDefault Boolean? @map("is_default")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  /// Target for composite (tenant_id, branch_id) foreign keys from later tables.
+  @@unique([tenantId, id])
+  @@unique([tenantId, isDefault])
+  @@map("branches")
+}
+
+/// Tenant-scoped (RLS), plus a self-read policy so users can list their own shops.
+model Membership {
+  id        String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String         @map("tenant_id") @db.Uuid
+  userId    String         @map("user_id") @db.Uuid
+  role      MembershipRole
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+/// Global (no RLS). One row per login. Access tokens carry its id (`sid`) and are
+/// rejected once it is revoked or past `expires_at`, which rotation never extends.
+model AuthSession {
+  id        String    @id @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// Absolute end of the session, fixed at login.
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+/// Global (no RLS): looked up by hash before any tenant context exists.
+model RefreshToken {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  /// The session's active shop.
+  tenantId     String    @map("tenant_id") @db.Uuid
+  /// The login session this token belongs to. Reuse of a rotated token revokes the session.
+  sessionId    String    @map("session_id") @db.Uuid
+  /// SHA-256 of the opaque token. The token itself is never stored.
+  tokenHash    String    @unique @map("token_hash")
+  replacedById String?   @unique @map("replaced_by_id") @db.Uuid
+  /// Never later than the session's expires_at.
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
+  userAgent    String?   @map("user_agent")
+  ip           String?
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  session    AuthSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken? @relation("Rotation", fields: [replacedById], references: [id], onDelete: SetNull)
+  replaces   RefreshToken? @relation("Rotation")
+
+  @@index([sessionId])
+  @@index([userId])
+  @@map("refresh_tokens")
 }

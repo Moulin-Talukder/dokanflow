@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import type { ValidationIssue } from '@dokanflow/shared';
+import { validationMessageEn, type ValidationIssue } from '@dokanflow/shared';
 import type { z } from 'zod';
 
 /** Thrown when request input fails Zod validation. Rendered as VALIDATION_FAILED. */
@@ -12,7 +12,8 @@ export class RequestValidationException extends BadRequestException {
     return new RequestValidationException(
       error.issues.map((issue) => ({
         path: issue.path.map(String).join('.'),
-        message: issue.message,
+        // Shared schemas use translatable keys; the API responds in English.
+        message: validationMessageEn(issue.message),
       })),
     );
   }

@@ -45,6 +45,10 @@ Multi-tenant POS and inventory SaaS for small Bangladeshi retail businesses (dok
 - **Validation messages** in shared Zod schemas are keys (`validation.*`). The API maps them to English; the web app translates them.
 - **Web text** always goes through `useT()` (or `createTranslator` on the server) with keys in `apps/web/src/i18n/messages/en.ts`. Never hard-code UI strings.
 - **Web API calls** go through `useAuth().client.request(...)`. The access token is kept in memory only, and refreshes are single-flight and serialized across tabs.
+- **Sessions:** access tokens carry `sid`; `TenantContextGuard` rejects tokens whose `auth_sessions` row is revoked or expired. To end someone's access, revoke sessions (in the same transaction as the change that requires it); never compare timestamps.
+- **Never use a shop id from the request as RLS context.** Check membership with `MembershipLookup.findOwn()` (user context only) first.
+- **Password hashing** goes through the `PasswordHasher` service (concurrency-capped), never the raw functions.
+- **Rate-limited endpoints** use `@UseGuards(RateLimitGuard)` with `@RateLimit('<policy>')` from `RATE_LIMIT_POLICIES`. Login and register also require the CSRF header.
 
 ## Core rules (non-negotiable)
 

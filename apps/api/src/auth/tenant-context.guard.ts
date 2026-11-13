@@ -12,9 +12,10 @@ import { isPublic } from './jwt-auth.guard.js';
 import { MembershipLookup } from './membership.lookup.js';
 
 /**
- * Step 2 of 3: resolves the user's membership in the token's tenant from the
- * database on every request, so role changes, removals, disabled accounts and
- * password resets take effect immediately rather than when the token expires.
+ * Step 2 of 3: resolves the user's membership in the token's tenant, and the
+ * token's login session, from the database on every request. Role changes,
+ * removals, disabled accounts, logout, password changes and resets therefore take
+ * effect immediately rather than when the access token expires.
  * Also enforces the first-login password change.
  */
 @Injectable()
@@ -34,12 +35,14 @@ export class TenantContextGuard implements CanActivate {
       throw new UnauthorizedException();
     }
 
-    const found = await this.memberships.find(claims.sub, claims.tid);
+    // The token's tenant and session are server-signed, so they are safe RLS context.
+    const found = await this.memberships.forAccessToken(claims);
     if (
       found?.userStatus !== 'active' ||
       found.tenantStatus !== 'active' ||
-      // Tokens issued before the last password change or reset are no longer valid.
-      claims.iat < Math.floor(found.passwordChangedAt.getTime() / 1000)
+      // Logout, refresh-token reuse, password change or reset, or the session's
+      // absolute expiry: the access token stops working immediately.
+      !found.sessionActive
     ) {
       throw new UnauthorizedException('Session is no longer valid');
     }

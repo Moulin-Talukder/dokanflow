@@ -82,11 +82,11 @@ export class AuthClient {
   }
 
   async login(input: LoginRequest): Promise<Session> {
-    return this.accept(await this.authCall('/auth/login', input));
+    return this.accept(await this.authCall('/auth/login', input, { csrf: true }));
   }
 
   async register(input: RegisterRequest): Promise<Session> {
-    return this.accept(await this.authCall('/auth/register', input));
+    return this.accept(await this.authCall('/auth/register', input, { csrf: true }));
   }
 
   async changePassword(input: ChangePasswordRequest): Promise<Session> {

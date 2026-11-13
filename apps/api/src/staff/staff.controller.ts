@@ -1,4 +1,13 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -20,6 +29,7 @@ import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentAuth, RequirePermission } from '../auth/decorators.js';
 import { toOpenApiSchema } from '../common/openapi.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
+import { RateLimit, RateLimitGuard } from '../rate-limit/rate-limit.guard.js';
 import { StaffService } from './staff.service.js';
 
 @ApiTags('staff')
@@ -49,6 +59,8 @@ export class StaffController {
   @Post(':userId/reset-password')
   @HttpCode(204)
   @RequirePermission('staff:reset-password')
+  @UseGuards(RateLimitGuard)
+  @RateLimit('staffResetPassword')
   @ApiBody({ schema: toOpenApiSchema(resetStaffPasswordRequestSchema, 'input') })
   async resetPassword(
     @CurrentAuth() auth: AuthContext,

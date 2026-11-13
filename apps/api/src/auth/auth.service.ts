@@ -17,13 +17,17 @@ import { PrismaService } from '../infra/prisma.service.js';
 import { AccessTokenService } from './access-token.service.js';
 import type { AuthContext } from './auth-context.js';
 import { MembershipLookup } from './membership.lookup.js';
-import { getDummyPasswordHash, hashPassword, verifyPassword } from './password-hasher.js';
-import { type ClientMeta, RefreshTokenService } from './refresh-token.js';
+import { PasswordHasher } from './password-hasher.service.js';
+import { revokeAllSessionsOfUser } from './prisma-refresh-token.store.js';
+import type { RefreshCookie } from './refresh-cookie.js';
+import { type ClientMeta, type IssuedRefreshToken, RefreshTokenService } from './refresh-token.js';
 
-/** What the controller needs: the JSON body, plus the refresh token to put in the cookie. */
+/** What the controller needs: the JSON body, plus the refresh token for the cookie. */
 export interface IssuedSession {
   body: AuthResponse;
   refreshToken: string;
+  /** The cookie must not outlive the token (which never outlives the session). */
+  refreshExpiresAt: Date;
 }
 
 const DEFAULT_BRANCH_NAME = 'Main branch';
@@ -42,6 +46,17 @@ export async function createTenantWithOwner(
   });
 }
 
+/** Turns the cookie read result into a token, refusing duplicates outright. */
+export function requireRefreshToken(cookie: RefreshCookie): string {
+  if (cookie.status === 'duplicate') {
+    throw new ApiHttpException(400, 'BAD_REQUEST', 'Duplicate session cookies');
+  }
+  if (cookie.status === 'missing') {
+    throw new UnauthorizedException('No session');
+  }
+  return cookie.token;
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -51,11 +66,12 @@ export class AuthService {
     private readonly accessTokens: AccessTokenService,
     private readonly refreshTokens: RefreshTokenService,
     private readonly memberships: MembershipLookup,
+    private readonly passwords: PasswordHasher,
   ) {}
 
   /** Self-service signup: a new owner account with a new business and its default branch. */
   async register(input: RegisterRequest, meta: ClientMeta): Promise<IssuedSession> {
-    const passwordHash = await hashPassword(input.password);
+    const passwordHash = await this.passwords.hash(input.password);
     const userId = randomUUID();
     const tenantId = randomUUID();
     try {
@@ -81,17 +97,16 @@ export class AuthService {
    * same time, so the endpoint does not reveal which accounts exist.
    */
   async login(input: LoginRequest, meta: ClientMeta): Promise<IssuedSession> {
+    const phone = input.identifier.includes('@') ? null : normalizeBdPhone(input.identifier);
     const where = input.identifier.includes('@')
       ? { email: input.identifier.trim().toLowerCase() }
-      : (() => {
-          const phone = normalizeBdPhone(input.identifier);
-          return phone ? { phone } : null;
-        })();
+      : phone
+        ? { phone }
+        : null;
     const user = where ? await this.prisma.client.user.findUnique({ where }) : null;
-    const passwordOk = await verifyPassword(
-      input.password,
-      user?.passwordHash ?? (await getDummyPasswordHash()),
-    );
+    const passwordOk = user
+      ? await this.passwords.verify(input.password, user.passwordHash)
+      : await this.passwords.verifyDummy(input.password);
     if (!user || !passwordOk || user.status !== 'active') {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -125,14 +140,11 @@ export class AuthService {
   }
 
   /** Rotates the refresh token. A reused token revokes its whole session. */
-  async refresh(presented: string | undefined, meta: ClientMeta): Promise<IssuedSession> {
-    if (!presented) {
-      throw new UnauthorizedException('No session');
-    }
-    const result = await this.refreshTokens.rotate(presented, meta);
+  async refresh(cookie: RefreshCookie, meta: ClientMeta): Promise<IssuedSession> {
+    const result = await this.refreshTokens.rotate(requireRefreshToken(cookie), meta);
     if (result.status === 'reused') {
       this.logger.warn(
-        { userId: result.userId, familyId: result.familyId },
+        { userId: result.userId, sessionId: result.sessionId },
         'Refresh token reuse detected; session revoked',
       );
     }
@@ -140,32 +152,34 @@ export class AuthService {
       throw new UnauthorizedException('Session expired');
     }
 
-    const { userId, tenantId, familyId } = result.record;
-    const membership = await this.memberships.find(userId, tenantId);
+    const { userId, tenantId, sessionId } = result.record;
+    const membership = await this.memberships.findOwn(userId, tenantId);
     if (membership?.userStatus !== 'active' || membership.tenantStatus !== 'active') {
-      await this.refreshTokens.revokeSession(result.token);
+      await this.refreshTokens.revokeSession(sessionId);
       throw new UnauthorizedException('Session is no longer valid');
     }
-    return this.sessionFor(userId, tenantId, familyId, result.token);
+    return this.sessionFor(result);
   }
 
-  async logout(presented: string | undefined): Promise<void> {
-    if (presented) {
-      await this.refreshTokens.revokeSession(presented);
+  async logout(cookie: RefreshCookie): Promise<void> {
+    if (cookie.status === 'ok') {
+      await this.refreshTokens.revokeSessionByToken(cookie.token);
     }
   }
 
-  /** Moves the current session to another shop the user belongs to. */
+  /**
+   * Moves the current session to another shop. Membership in the target shop is
+   * verified with the user context only; the requested shop id never becomes the
+   * RLS tenant context.
+   */
   async switchTenant(
     auth: AuthContext,
-    presented: string | undefined,
+    cookie: RefreshCookie,
     targetTenantId: string,
     meta: ClientMeta,
   ): Promise<IssuedSession> {
-    if (!presented) {
-      throw new UnauthorizedException('No session');
-    }
-    const membership = await this.memberships.find(auth.userId, targetTenantId);
+    const presented = requireRefreshToken(cookie);
+    const membership = await this.memberships.findOwn(auth.userId, targetTenantId);
     if (membership?.tenantStatus !== 'active') {
       throw new ApiHttpException(403, 'FORBIDDEN', 'You are not a member of that shop');
     }
@@ -180,12 +194,13 @@ export class AuthService {
       where: { id: auth.userId },
       data: { lastTenantId: targetTenantId },
     });
-    return this.sessionFor(auth.userId, targetTenantId, result.record.familyId, result.token);
+    return this.sessionFor(result);
   }
 
   /**
    * Replaces the password (and clears a temporary-password flag). Every existing
-   * session of the user is revoked; the caller gets a fresh one.
+   * session is revoked, which also invalidates their access tokens at once; the
+   * caller gets a fresh session.
    */
   async changePassword(
     auth: AuthContext,
@@ -193,20 +208,20 @@ export class AuthService {
     meta: ClientMeta,
   ): Promise<IssuedSession> {
     const user = await this.prisma.client.user.findUniqueOrThrow({ where: { id: auth.userId } });
-    if (!(await verifyPassword(input.currentPassword, user.passwordHash))) {
+    if (!(await this.passwords.verify(input.currentPassword, user.passwordHash))) {
       throw new RequestValidationException([
         { path: 'currentPassword', message: 'Current password is incorrect' },
       ]);
     }
-    await this.prisma.client.user.update({
-      where: { id: auth.userId },
-      data: {
-        passwordHash: await hashPassword(input.newPassword),
-        mustChangePassword: false,
-        passwordChangedAt: new Date(),
-      },
+    const passwordHash = await this.passwords.hash(input.newPassword);
+    const now = new Date();
+    await this.prisma.client.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: auth.userId },
+        data: { passwordHash, mustChangePassword: false, passwordChangedAt: now },
+      });
+      await revokeAllSessionsOfUser(tx, auth.userId, now);
     });
-    await this.refreshTokens.revokeAllForUser(auth.userId);
     return this.startSession(auth.userId, auth.tenantId, meta);
   }
 
@@ -245,24 +260,23 @@ export class AuthService {
     tenantId: string,
     meta: ClientMeta,
   ): Promise<IssuedSession> {
-    const issued = await this.refreshTokens.issue(userId, tenantId, meta);
-    return this.sessionFor(userId, tenantId, issued.record.familyId, issued.token);
+    return this.sessionFor(await this.refreshTokens.issue(userId, tenantId, meta));
   }
 
-  private async sessionFor(
-    userId: string,
-    tenantId: string,
-    sessionId: string,
-    refreshToken: string,
-  ): Promise<IssuedSession> {
-    const accessToken = await this.accessTokens.sign({ userId, tenantId, sessionId });
+  private async sessionFor({ token, record }: IssuedRefreshToken): Promise<IssuedSession> {
+    const accessToken = await this.accessTokens.sign({
+      userId: record.userId,
+      tenantId: record.tenantId,
+      sessionId: record.sessionId,
+    });
     return {
       body: {
         accessToken,
         expiresIn: this.accessTokens.ttlSeconds,
-        session: await this.session(userId, tenantId),
+        session: await this.session(record.userId, record.tenantId),
       },
-      refreshToken,
+      refreshToken: token,
+      refreshExpiresAt: record.expiresAt,
     };
   }
 }

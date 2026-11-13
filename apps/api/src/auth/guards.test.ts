@@ -19,7 +19,7 @@ import {
   RequirePermission,
 } from './decorators.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
-import { MembershipLookup, type MembershipLookupResult } from './membership.lookup.js';
+import { MembershipLookup, type RequestAuthState } from './membership.lookup.js';
 import { PermissionsGuard } from './permissions.guard.js';
 import { TenantContextGuard } from './tenant-context.guard.js';
 import { testEnv } from './test-env.js';
@@ -65,9 +65,9 @@ class ProbeController {
 
 /** Stands in for the database query; keyed by `${userId}:${tenantId}`. */
 class FakeMembershipLookup {
-  rows = new Map<string, MembershipLookupResult>();
-  find(userId: string, tenantId: string): Promise<MembershipLookupResult | null> {
-    return Promise.resolve(this.rows.get(`${userId}:${tenantId}`) ?? null);
+  rows = new Map<string, RequestAuthState>();
+  forAccessToken(claims: { sub: string; tid: string }): Promise<RequestAuthState | null> {
+    return Promise.resolve(this.rows.get(`${claims.sub}:${claims.tid}`) ?? null);
   }
 }
 
@@ -82,13 +82,13 @@ describe('auth guard chain (HTTP)', () => {
   const tenantA = randomUUID();
   const tenantB = randomUUID();
 
-  function member(role: MembershipRole, extra: Partial<MembershipLookupResult> = {}): void {
+  function member(role: MembershipRole, extra: Partial<RequestAuthState> = {}): void {
     lookup.rows.set(`${userId}:${tenantA}`, {
       role,
       mustChangePassword: false,
-      passwordChangedAt: new Date('2026-01-01T00:00:00Z'),
       userStatus: 'active',
       tenantStatus: 'active',
+      sessionActive: true,
       ...extra,
     });
   }
@@ -169,10 +169,14 @@ describe('auth guard chain (HTTP)', () => {
         .expect(401);
     });
 
-    it('rejects tokens issued before the last password change or reset', async () => {
+    it('rejects a token whose session was revoked (logout, reuse, password change or reset)', async () => {
+      // A token issued this very second is still rejected: the check is the session
+      // row, not a timestamp comparison.
       const token = await bearer();
-      member('owner', { passwordChangedAt: new Date(Date.now() + 2000) });
+      member('owner', { sessionActive: false });
       await request(server).get('/probe/me').set('authorization', token).expect(401);
+      member('owner', { sessionActive: true });
+      await request(server).get('/probe/me').set('authorization', token).expect(200);
     });
   });
 

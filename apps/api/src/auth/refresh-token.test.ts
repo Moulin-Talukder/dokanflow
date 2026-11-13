@@ -8,65 +8,82 @@ import {
   RefreshTokenService,
   type RefreshTokenStore,
   type RefreshTokenTx,
+  type SessionRecord,
 } from './refresh-token.js';
 
-/** Behaves like the refresh_tokens table, including all-or-nothing transactions. */
+type TokenRow = NewRefreshToken & { revokedAt: Date | null; replacedById: string | null };
+
+/** Behaves like auth_sessions + refresh_tokens, including all-or-nothing transactions. */
 class InMemoryStore implements RefreshTokenStore {
-  rows = new Map<
-    string,
-    NewRefreshToken & { revokedAt: Date | null; replacedById: string | null }
-  >();
+  tokens = new Map<string, TokenRow>();
+  sessions = new Map<string, SessionRecord>();
 
   async transaction<T>(fn: (tx: RefreshTokenTx) => Promise<T>): Promise<T> {
-    const snapshot = new Map([...this.rows].map(([k, v]) => [k, { ...v }]));
+    const snapshot = {
+      tokens: new Map([...this.tokens].map(([k, v]) => [k, { ...v }])),
+      sessions: new Map([...this.sessions].map(([k, v]) => [k, { ...v }])),
+    };
+    const revokeTokens = (match: (row: TokenRow) => boolean, at: Date) => {
+      for (const row of this.tokens.values()) {
+        if (match(row) && row.revokedAt === null) row.revokedAt = at;
+      }
+    };
     const tx: RefreshTokenTx = {
       findByHashForUpdate: (hash) => {
-        const row = [...this.rows.values()].find((r) => r.tokenHash === hash);
-        return Promise.resolve(row ? toRecord(row) : null);
+        const row = [...this.tokens.values()].find((r) => r.tokenHash === hash);
+        return Promise.resolve(
+          row
+            ? {
+                id: row.id,
+                userId: row.userId,
+                tenantId: row.tenantId,
+                sessionId: row.sessionId,
+                expiresAt: row.expiresAt,
+                revokedAt: row.revokedAt,
+                replacedById: row.replacedById,
+              }
+            : null,
+        );
+      },
+      findSessionForUpdate: (id) => {
+        const session = this.sessions.get(id);
+        return Promise.resolve(session ? { ...session } : null);
+      },
+      insertSession: (session) => {
+        this.sessions.set(session.id, { ...session });
+        return Promise.resolve();
       },
       insert: (token) => {
-        this.rows.set(token.id, { ...token, revokedAt: null, replacedById: null });
+        this.tokens.set(token.id, { ...token, revokedAt: null, replacedById: null });
         return Promise.resolve();
       },
       markReplaced: (id, replacedById) => {
-        const row = this.rows.get(id);
+        const row = this.tokens.get(id);
         if (row) row.replacedById = replacedById;
         return Promise.resolve();
       },
-      revokeFamily: (familyId, at) => {
-        for (const row of this.rows.values()) {
-          if (row.familyId === familyId && row.revokedAt === null) row.revokedAt = at;
-        }
+      revokeSession: (sessionId, at) => {
+        const session = this.sessions.get(sessionId);
+        if (session?.revokedAt === null) session.revokedAt = at;
+        revokeTokens((row) => row.sessionId === sessionId, at);
         return Promise.resolve();
       },
       revokeAllForUser: (userId, at) => {
-        for (const row of this.rows.values()) {
-          if (row.userId === userId && row.revokedAt === null) row.revokedAt = at;
+        for (const session of this.sessions.values()) {
+          if (session.userId === userId && session.revokedAt === null) session.revokedAt = at;
         }
+        revokeTokens((row) => row.userId === userId, at);
         return Promise.resolve();
       },
     };
     try {
       return await fn(tx);
     } catch (error) {
-      this.rows = snapshot;
+      this.tokens = snapshot.tokens;
+      this.sessions = snapshot.sessions;
       throw error;
     }
   }
-}
-
-function toRecord(
-  row: InMemoryStore['rows'] extends Map<string, infer R> ? R : never,
-): RefreshTokenRecord {
-  return {
-    id: row.id,
-    userId: row.userId,
-    tenantId: row.tenantId,
-    familyId: row.familyId,
-    expiresAt: row.expiresAt,
-    revokedAt: row.revokedAt,
-    replacedById: row.replacedById,
-  };
 }
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -82,45 +99,41 @@ describe('RefreshTokenService', () => {
 
   beforeEach(() => {
     store = new InMemoryStore();
-    now = new Date('2026-11-04T10:00:00Z');
-    service = new RefreshTokenService(store, 30 * DAY, () => now);
+    now = new Date('2026-11-13T10:00:00Z');
+    service = new RefreshTokenService(store, {
+      refreshTtlMs: 14 * DAY,
+      sessionMaxAgeMs: 30 * DAY,
+      clock: () => now,
+    });
   });
 
   it('stores only a SHA-256 hash of the token', async () => {
     const { token } = await service.issue(USER, TENANT_A, meta);
-    const [row] = [...store.rows.values()];
+    const [row] = [...store.tokens.values()];
     expect(row?.tokenHash).toBe(hashRefreshToken(token));
-    expect(row?.tokenHash).not.toContain(token);
-    expect(JSON.stringify([...store.rows.values()])).not.toContain(token);
+    expect(JSON.stringify([...store.tokens.values()])).not.toContain(token);
   });
 
-  it('issues a new family for each login', async () => {
+  it('starts a new session for each login, with a fixed absolute expiry', async () => {
     const first = await service.issue(USER, TENANT_A, meta);
     const second = await service.issue(USER, TENANT_A, meta);
-    expect(first.record.familyId).not.toBe(second.record.familyId);
+    expect(first.record.sessionId).not.toBe(second.record.sessionId);
+    expect(store.sessions.get(first.record.sessionId)?.expiresAt).toEqual(
+      new Date(now.getTime() + 30 * DAY),
+    );
+    expect(first.record.expiresAt).toEqual(new Date(now.getTime() + 14 * DAY));
   });
 
   describe('rotation', () => {
-    it('exchanges a valid token for a new one in the same family', async () => {
+    it('exchanges a valid token for a new one in the same session', async () => {
       const issued = await service.issue(USER, TENANT_A, meta);
       const result = await service.rotate(issued.token, meta);
 
       expect(result.status).toBe('rotated');
       if (result.status !== 'rotated') return;
       expect(result.token).not.toBe(issued.token);
-      expect(result.record.familyId).toBe(issued.record.familyId);
-      expect(result.record.tenantId).toBe(TENANT_A);
-      expect(store.rows.get(issued.record.id)?.replacedById).toBe(result.record.id);
-    });
-
-    it('keeps rotating along the chain', async () => {
-      let token = (await service.issue(USER, TENANT_A, meta)).token;
-      for (let i = 0; i < 5; i++) {
-        const result = await service.rotate(token, meta);
-        expect(result.status).toBe('rotated');
-        if (result.status === 'rotated') token = result.token;
-      }
-      expect(store.rows.size).toBe(6);
+      expect(result.record.sessionId).toBe(issued.record.sessionId);
+      expect(store.tokens.get(issued.record.id)?.replacedById).toBe(result.record.id);
     });
 
     it('can move the session to another tenant (switch-tenant)', async () => {
@@ -131,61 +144,87 @@ describe('RefreshTokenService', () => {
 
     it('rejects an unknown token without changing anything', async () => {
       await service.issue(USER, TENANT_A, meta);
-      const before = JSON.stringify([...store.rows.values()]);
+      const before = JSON.stringify([...store.tokens.values()]);
       expect(await service.rotate('not-a-real-token', meta)).toEqual({ status: 'invalid' });
-      expect(JSON.stringify([...store.rows.values()])).toBe(before);
+      expect(JSON.stringify([...store.tokens.values()])).toBe(before);
     });
 
     it("rejects someone else's token when the caller's identity is known", async () => {
       const issued = await service.issue(USER, TENANT_A, meta);
-      const result = await service.rotate(issued.token, meta, { expectedUserId: randomUUID() });
-      expect(result).toEqual({ status: 'invalid' });
-      expect(store.rows.get(issued.record.id)?.replacedById).toBeNull();
+      expect(await service.rotate(issued.token, meta, { expectedUserId: randomUUID() })).toEqual({
+        status: 'invalid',
+      });
+      expect(store.tokens.get(issued.record.id)?.replacedById).toBeNull();
     });
 
-    it('rejects an expired token and issues nothing', async () => {
+    it('rejects an idle-expired token and issues nothing', async () => {
       const issued = await service.issue(USER, TENANT_A, meta);
-      now = new Date(now.getTime() + 30 * DAY);
+      now = new Date(now.getTime() + 14 * DAY);
       expect(await service.rotate(issued.token, meta)).toEqual({ status: 'expired' });
-      expect(store.rows.size).toBe(1);
+      expect(store.tokens.size).toBe(1);
+    });
+  });
+
+  describe('absolute session lifetime', () => {
+    it('never issues a token that outlives the session', async () => {
+      let { token } = await service.issue(USER, TENANT_A, meta);
+      const sessionEnd = now.getTime() + 30 * DAY;
+      // Refresh every 10 days: day 10 and day 20 succeed; tokens are capped at day 30.
+      for (const day of [10, 20]) {
+        now = new Date(Date.parse('2026-11-13T10:00:00Z') + day * DAY);
+        const result = await service.rotate(token, meta);
+        if (result.status !== 'rotated') throw new Error(`expected rotation on day ${String(day)}`);
+        expect(result.record.expiresAt.getTime()).toBeLessThanOrEqual(sessionEnd);
+        token = result.token;
+      }
+      // Day 20's token expires exactly at the session end (day 30), not day 34.
+      const last = [...store.tokens.values()].at(-1);
+      expect(last?.expiresAt.getTime()).toBe(sessionEnd);
+    });
+
+    it('refuses to rotate once the session has ended, however recently the token was used', async () => {
+      let { token } = await service.issue(USER, TENANT_A, meta);
+      for (let day = 5; day < 30; day += 5) {
+        now = new Date(Date.parse('2026-11-13T10:00:00Z') + day * DAY);
+        const result = await service.rotate(token, meta);
+        if (result.status !== 'rotated') throw new Error('expected rotation');
+        token = result.token;
+      }
+      now = new Date(Date.parse('2026-11-13T10:00:00Z') + 30 * DAY);
+      expect(await service.rotate(token, meta)).toEqual({ status: 'expired' });
     });
   });
 
   describe('reuse detection', () => {
-    it('treats a second use of a rotated token as theft and revokes the whole family', async () => {
+    it('treats a second use of a rotated token as theft and revokes the whole session', async () => {
       const original = await service.issue(USER, TENANT_A, meta);
       const rotated = await service.rotate(original.token, meta);
       if (rotated.status !== 'rotated') throw new Error('expected rotation');
 
-      // An attacker replays the old token.
       const replay = await service.rotate(original.token, meta);
       expect(replay).toEqual({
         status: 'reused',
         userId: USER,
-        familyId: original.record.familyId,
+        sessionId: original.record.sessionId,
       });
+      expect(store.sessions.get(original.record.sessionId)?.revokedAt).toEqual(now);
 
-      // The legitimate holder's newer token is now dead too.
-      const victim = await service.rotate(rotated.token, meta);
-      expect(victim.status).toBe('reused');
-      for (const row of store.rows.values()) {
-        expect(row.revokedAt).not.toBeNull();
-      }
+      // The legitimate holder's newer token is dead too.
+      expect((await service.rotate(rotated.token, meta)).status).toBe('reused');
     });
 
-    it('only revokes the compromised family, not other sessions', async () => {
+    it('only revokes the compromised session, not other sessions', async () => {
       const laptop = await service.issue(USER, TENANT_A, meta);
       const phone = await service.issue(USER, TENANT_A, meta);
       await service.rotate(laptop.token, meta);
       await service.rotate(laptop.token, meta); // reuse
-
-      const phoneResult = await service.rotate(phone.token, meta);
-      expect(phoneResult.status).toBe('rotated');
+      expect((await service.rotate(phone.token, meta)).status).toBe('rotated');
     });
 
     it('treats a logged-out token as reused', async () => {
       const issued = await service.issue(USER, TENANT_A, meta);
-      await service.revokeSession(issued.token);
+      await service.revokeSessionByToken(issued.token);
+      expect(store.sessions.get(issued.record.sessionId)?.revokedAt).not.toBeNull();
       expect((await service.rotate(issued.token, meta)).status).toBe('reused');
     });
   });
@@ -195,40 +234,46 @@ describe('RefreshTokenService', () => {
     const other = await service.issue(randomUUID(), TENANT_A, meta);
     await service.revokeAllForUser(USER);
 
+    expect(store.sessions.get(mine.record.sessionId)?.revokedAt).not.toBeNull();
     expect((await service.rotate(mine.token, meta)).status).toBe('reused');
     expect((await service.rotate(other.token, meta)).status).toBe('rotated');
   });
 
   it('ignores logout with an unknown token', async () => {
-    await expect(service.revokeSession('unknown')).resolves.toBeUndefined();
+    await expect(service.revokeSessionByToken('unknown')).resolves.toBeUndefined();
   });
 });
 
 describe('decideRotation', () => {
-  const now = new Date('2026-11-04T10:00:00Z');
+  const now = new Date('2026-11-13T10:00:00Z');
+  const session: SessionRecord = {
+    id: randomUUID(),
+    userId: USER,
+    expiresAt: new Date(now.getTime() + DAY),
+    revokedAt: null,
+  };
   const base: RefreshTokenRecord = {
     id: randomUUID(),
     userId: USER,
     tenantId: TENANT_A,
-    familyId: randomUUID(),
+    sessionId: session.id,
     expiresAt: new Date(now.getTime() + 1000),
     revokedAt: null,
     replacedById: null,
   };
 
-  it('rotates a live token', () => {
-    expect(decideRotation(base, now)).toBe('rotate');
+  it('rotates a live token in a live session', () => {
+    expect(decideRotation(base, session, now)).toBe('rotate');
   });
 
-  it('flags replaced or revoked tokens as reuse, even when also expired', () => {
-    expect(decideRotation({ ...base, replacedById: randomUUID() }, now)).toBe('reused');
-    expect(decideRotation({ ...base, revokedAt: now }, now)).toBe('reused');
-    expect(
-      decideRotation({ ...base, revokedAt: now, expiresAt: new Date(now.getTime() - 1) }, now),
-    ).toBe('reused');
+  it('flags replaced or revoked tokens, or a revoked session, as reuse', () => {
+    expect(decideRotation({ ...base, replacedById: randomUUID() }, session, now)).toBe('reused');
+    expect(decideRotation({ ...base, revokedAt: now }, session, now)).toBe('reused');
+    expect(decideRotation(base, { ...session, revokedAt: now }, now)).toBe('reused');
   });
 
-  it('expires a token exactly at its expiry instant', () => {
-    expect(decideRotation({ ...base, expiresAt: now }, now)).toBe('expired');
+  it('expires at the token expiry or the session expiry, whichever comes first', () => {
+    expect(decideRotation({ ...base, expiresAt: now }, session, now)).toBe('expired');
+    expect(decideRotation(base, { ...session, expiresAt: now }, now)).toBe('expired');
   });
 });

@@ -67,8 +67,8 @@ export async function verifyPassword(password: string, encoded: string): Promise
 }
 
 /**
- * A real hash of a random password. Verifying against it when the user does not
- * exist makes "unknown user" and "wrong password" take the same time.
+ * A real hash of a random password, computed once. PasswordHasher warms it at
+ * startup; verifying against it makes unknown users take as long as real ones.
  */
 let dummyHash: Promise<string> | undefined;
 export function getDummyPasswordHash(): Promise<string> {

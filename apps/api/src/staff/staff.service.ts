@@ -2,8 +2,8 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { withDbContext } from '@dokanflow/db';
 import type { CreateStaffRequest, ResetStaffPasswordRequest, StaffMember } from '@dokanflow/shared';
 import type { AuthContext } from '../auth/auth-context.js';
-import { hashPassword } from '../auth/password-hasher.js';
-import { RefreshTokenService } from '../auth/refresh-token.js';
+import { PasswordHasher } from '../auth/password-hasher.service.js';
+import { revokeAllSessionsOfUser } from '../auth/prisma-refresh-token.store.js';
 import { ApiHttpException } from '../common/api-http.exception.js';
 import { isUniqueViolation } from '../common/prisma-errors.js';
 import { PrismaService } from '../infra/prisma.service.js';
@@ -12,7 +12,7 @@ import { PrismaService } from '../infra/prisma.service.js';
 export class StaffService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly refreshTokens: RefreshTokenService,
+    private readonly passwords: PasswordHasher,
   ) {}
 
   /** Members of the current shop. RLS limits the query to this tenant. */
@@ -58,7 +58,7 @@ export class StaffService {
    * existing person needs their consent (invite links, out of scope).
    */
   async create(auth: AuthContext, input: CreateStaffRequest): Promise<StaffMember> {
-    const passwordHash = await hashPassword(input.temporaryPassword);
+    const passwordHash = await this.passwords.hash(input.temporaryPassword);
     try {
       const user = await withDbContext(
         this.prisma.client,
@@ -104,54 +104,50 @@ export class StaffService {
   }
 
   /**
-   * Sets a new temporary password. Allowed only for staff accounts this shop
-   * created and that belong to no other shop; otherwise one shop's owner could
-   * take over an account used elsewhere. Ends all of the user's sessions.
+   * Sets a new temporary password and ends all of the person's sessions, in one
+   * transaction with one fixed context (this shop, this owner).
+   *
+   * Allowed only while this shop still manages the account. A managed account can
+   * only join another shop by starting its own business, and that clears
+   * managed_by_tenant_id in the same transaction (TenantsService). So "managed by
+   * this shop" also means "belongs to no other shop", without ever looking at
+   * other shops' memberships. The conditional update makes the check atomic.
    */
   async resetPassword(
     auth: AuthContext,
     targetUserId: string,
     input: ResetStaffPasswordRequest,
   ): Promise<void> {
-    const passwordHash = await hashPassword(input.temporaryPassword);
+    const passwordHash = await this.passwords.hash(input.temporaryPassword);
     await withDbContext(
       this.prisma.client,
       { tenantId: auth.tenantId, userId: auth.userId },
       async (tx) => {
         const membership = await tx.membership.findUnique({
           where: { tenantId_userId: { tenantId: auth.tenantId, userId: targetUserId } },
-          select: { role: true, user: { select: { managedByTenantId: true } } },
+          select: { role: true },
         });
         // RLS also guarantees this: another shop's member is simply not found.
         if (!membership) {
           throw new NotFoundException('Staff member not found');
         }
-        if (membership.role === 'owner' || membership.user.managedByTenantId !== auth.tenantId) {
+        if (membership.role === 'owner') {
+          throw new ApiHttpException(403, 'FORBIDDEN', "An owner's password cannot be reset");
+        }
+        const now = new Date();
+        const updated = await tx.user.updateMany({
+          where: { id: targetUserId, managedByTenantId: auth.tenantId },
+          data: { passwordHash, mustChangePassword: true, passwordChangedAt: now },
+        });
+        if (updated.count === 0) {
           throw new ApiHttpException(
             403,
             'FORBIDDEN',
-            'You can only reset passwords of staff accounts created by this shop',
+            'Only the person can change this password: the account is not managed by this shop',
           );
         }
-        // Look at the target's memberships everywhere. The self-read policy is
-        // scoped to app.user_id, so switch it to the target for this check only.
-        await tx.$executeRaw`SELECT set_config('app.user_id', ${targetUserId}, true)`;
-        const elsewhere = await tx.membership.count({
-          where: { userId: targetUserId, tenantId: { not: auth.tenantId } },
-        });
-        if (elsewhere > 0) {
-          throw new ApiHttpException(
-            403,
-            'FORBIDDEN',
-            'This person also belongs to another shop, so only they can change their password',
-          );
-        }
-        await tx.user.update({
-          where: { id: targetUserId },
-          data: { passwordHash, mustChangePassword: true, passwordChangedAt: new Date() },
-        });
+        await revokeAllSessionsOfUser(tx, targetUserId, now);
       },
     );
-    await this.refreshTokens.revokeAllForUser(targetUserId);
   }
 }

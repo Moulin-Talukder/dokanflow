@@ -57,10 +57,11 @@ model User {
   phone              String?    @unique
   passwordHash       String     @map("password_hash")
   mustChangePassword Boolean    @default(false) @map("must_change_password")
-  /// Access tokens issued before this instant are rejected.
+  /// Informational only. Revocation uses auth_sessions, not timestamps (no clock-skew issues).
   passwordChangedAt  DateTime   @default(now()) @map("password_changed_at") @db.Timestamptz(3)
   status             UserStatus @default(active)
-  /// Set when an owner created this account as staff. Only that shop may reset its password.
+  /// Set when an owner created this account as staff; only that shop may reset its password.
+  /// Cleared when the person creates their own business (the account is then self-managed).
   managedByTenantId  String?    @map("managed_by_tenant_id") @db.Uuid
   /// The shop selected at the last login or switch.
   lastTenantId       String?    @map("last_tenant_id") @db.Uuid
@@ -71,6 +72,7 @@ model User {
   lastTenant      Tenant?        @relation("LastTenant", fields: [lastTenantId], references: [id], onDelete: SetNull)
   memberships     Membership[]
   refreshTokens   RefreshToken[]
+  sessions        AuthSession[]
 
   @@map("users")
 }
@@ -131,17 +133,35 @@ model Membership {
   @@map("memberships")
 }
 
+/// Global (no RLS). One row per login. Access tokens carry its id (`sid`) and are
+/// rejected once it is revoked or past `expires_at`, which rotation never extends.
+model AuthSession {
+  id        String    @id @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// Absolute end of the session, fixed at login.
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
 /// Global (no RLS): looked up by hash before any tenant context exists.
 model RefreshToken {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId       String    @map("user_id") @db.Uuid
   /// The session's active shop.
   tenantId     String    @map("tenant_id") @db.Uuid
-  /// All tokens descended from one login share a family; reuse revokes the family.
-  familyId     String    @map("family_id") @db.Uuid
+  /// The login session this token belongs to. Reuse of a rotated token revokes the session.
+  sessionId    String    @map("session_id") @db.Uuid
   /// SHA-256 of the opaque token. The token itself is never stored.
   tokenHash    String    @unique @map("token_hash")
   replacedById String?   @unique @map("replaced_by_id") @db.Uuid
+  /// Never later than the session's expires_at.
   expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
   revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
   userAgent    String?   @map("user_agent")
@@ -150,10 +170,11 @@ model RefreshToken {
 
   user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  session    AuthSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   replacedBy RefreshToken? @relation("Rotation", fields: [replacedById], references: [id], onDelete: SetNull)
   replaces   RefreshToken? @relation("Rotation")
 
-  @@index([familyId])
+  @@index([sessionId])
   @@index([userId])
   @@map("refresh_tokens")
 }

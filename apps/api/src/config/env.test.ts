@@ -16,7 +16,11 @@ describe('parseApiEnv', () => {
       API_PORT: 4000,
       API_CORS_ORIGINS: [],
       JWT_ACCESS_TTL_SECONDS: 900,
-      REFRESH_TOKEN_TTL_DAYS: 30,
+      REFRESH_TOKEN_TTL_DAYS: 14,
+      SESSION_MAX_AGE_DAYS: 30,
+      PASSWORD_HASH_CONCURRENCY: 4,
+      PASSWORD_HASH_QUEUE: 32,
+      RATE_LIMIT_SCALE: 1,
       AUTH_COOKIE_SECURE: false,
       AUTH_COOKIE_SAMESITE: 'strict',
     });
@@ -75,6 +79,7 @@ describe('parseApiEnv', () => {
   describe('auth cookie settings', () => {
     const production = {
       ...valid,
+      JWT_ACCESS_SECRET: 'kQ3v9Zs1Lr8XbN2wTe5YpHc7Ud0Mg4Ja6Fi1Ow8Rx3Vt5Bn9Ky2Lq7Pz0Sm4Gh6D',
       NODE_ENV: 'production',
       API_CORS_ORIGINS: 'https://app.example.com',
     };
@@ -110,6 +115,48 @@ describe('parseApiEnv', () => {
       expect(() => parseApiEnv({ ...valid, AUTH_COOKIE_SECURE: 'yes' })).toThrow(
         /AUTH_COOKIE_SECURE/,
       );
+    });
+  });
+
+  describe('JWT secret strength in production', () => {
+    const production = {
+      ...valid,
+      NODE_ENV: 'production',
+      API_CORS_ORIGINS: 'https://app.example.com',
+    };
+
+    it('refuses to start with the .env.example secret', () => {
+      expect(() =>
+        parseApiEnv({
+          ...production,
+          JWT_ACCESS_SECRET: 'local-only-change-me-0123456789abcdefghijklmnop',
+        }),
+      ).toThrow(/JWT_ACCESS_SECRET: looks like a placeholder/);
+    });
+
+    it('refuses a long but low-entropy secret', () => {
+      expect(() => parseApiEnv({ ...production, JWT_ACCESS_SECRET: 'x'.repeat(64) })).toThrow(
+        /JWT_ACCESS_SECRET: too little entropy/,
+      );
+    });
+
+    it('allows the placeholder outside production', () => {
+      expect(() =>
+        parseApiEnv({
+          ...valid,
+          JWT_ACCESS_SECRET: 'local-only-change-me-0123456789abcdefghijklmnop',
+        }),
+      ).not.toThrow();
+    });
+
+    it('refuses a scaled-up rate limit in production', () => {
+      expect(() =>
+        parseApiEnv({
+          ...production,
+          JWT_ACCESS_SECRET: 'kQ3v9Zs1Lr8XbN2wTe5YpHc7Ud0Mg4Ja6Fi1Ow8Rx3Vt5Bn9Ky2Lq7Pz0Sm4Gh6D',
+          RATE_LIMIT_SCALE: '100',
+        }),
+      ).toThrow(/RATE_LIMIT_SCALE/);
     });
   });
 });

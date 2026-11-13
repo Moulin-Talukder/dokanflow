@@ -58,6 +58,21 @@ describe('AuthClient', () => {
     expect(sessions).toEqual([session]);
   });
 
+  it('sends the CSRF header and credentials on login and register', async () => {
+    const { client, fetchImpl } = setup(() => Response.json(auth('t1')));
+    await client.login({ identifier: 'rahim@example.com', password: 'x' });
+    await client.register({
+      businessName: 'Shop',
+      name: 'Rahim',
+      email: 'rahim@example.com',
+      password: 'a-long-password',
+    });
+    for (const [, init] of fetchImpl.mock.calls) {
+      expect(init?.credentials).toBe('include');
+      expect(headersOf(init)['x-dokanflow-csrf']).toBe('1');
+    }
+  });
+
   it('shares one refresh between concurrent callers', async () => {
     let resolve: (r: Response) => void = () => undefined;
     const { client, fetchImpl } = setup(

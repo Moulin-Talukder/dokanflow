@@ -5,7 +5,6 @@ import {
   authResponseSchema,
   type ChangePasswordRequest,
   changePasswordRequestSchema,
-  CSRF_HEADER,
   type LoginRequest,
   loginRequestSchema,
   type RegisterRequest,
@@ -25,7 +24,14 @@ import { AuthService, type IssuedSession } from './auth.service.js';
 import { clientMeta } from './client-meta.js';
 import { CsrfGuard } from './csrf.guard.js';
 import { AllowWhilePasswordChangeRequired, CurrentAuth, Public } from './decorators.js';
-import { readCookie, type RefreshCookieConfig, refreshCookieConfig } from './refresh-cookie.js';
+import {
+  LEGACY_REFRESH_COOKIE_PATH,
+  type RefreshCookie,
+  type RefreshCookieConfig,
+  readRefreshCookie,
+  refreshCookieConfig,
+} from './refresh-cookie.js';
+import { RateLimit, RateLimitGuard } from '../rate-limit/rate-limit.guard.js';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -39,7 +45,10 @@ export class AuthController {
     this.cookie = refreshCookieConfig(config);
   }
 
+  /** Rate-limited per IP and email; CSRF header required like every cookie-setting endpoint. */
   @Public()
+  @UseGuards(RateLimitGuard, CsrfGuard)
+  @RateLimit('register')
   @Post('register')
   @ApiBody({ schema: toOpenApiSchema(registerRequestSchema, 'input') })
   @ApiOkResponse({ schema: toOpenApiSchema(authResponseSchema) })
@@ -51,7 +60,10 @@ export class AuthController {
     return this.send(res, await this.auth.register(body, clientMeta(req)));
   }
 
+  /** Rate-limited per IP and per email/phone; CSRF header required (prevents login CSRF). */
   @Public()
+  @UseGuards(RateLimitGuard, CsrfGuard)
+  @RateLimit('login')
   @Post('login')
   @HttpCode(200)
   @ApiBody({ schema: toOpenApiSchema(loginRequestSchema, 'input') })
@@ -66,7 +78,8 @@ export class AuthController {
 
   /** Cookie-authenticated, so CSRF-protected. Rotates the refresh token. */
   @Public()
-  @UseGuards(CsrfGuard)
+  @UseGuards(RateLimitGuard, CsrfGuard)
+  @RateLimit('refresh')
   @Post('refresh')
   @HttpCode(200)
   @ApiCookieAuth()
@@ -76,7 +89,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthResponse> {
     try {
-      return this.send(res, await this.auth.refresh(this.readToken(req), clientMeta(req)));
+      return this.send(res, await this.auth.refresh(this.readCookie(req), clientMeta(req)));
     } catch (error) {
       this.clear(res);
       throw error;
@@ -89,7 +102,7 @@ export class AuthController {
   @HttpCode(204)
   @ApiCookieAuth()
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response): Promise<void> {
-    await this.auth.logout(this.readToken(req));
+    await this.auth.logout(this.readCookie(req));
     this.clear(res);
   }
 
@@ -104,6 +117,8 @@ export class AuthController {
   @Post('change-password')
   @HttpCode(200)
   @AllowWhilePasswordChangeRequired()
+  @UseGuards(RateLimitGuard)
+  @RateLimit('changePassword')
   @ApiBearerAuth()
   @ApiBody({ schema: toOpenApiSchema(changePasswordRequestSchema, 'input') })
   @ApiOkResponse({ schema: toOpenApiSchema(authResponseSchema) })
@@ -130,27 +145,32 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthResponse> {
+    const cookie = this.readCookie(req);
+    if (cookie.status === 'duplicate') {
+      this.clear(res);
+    }
     return this.send(
       res,
-      await this.auth.switchTenant(auth, this.readToken(req), body.tenantId, clientMeta(req)),
+      await this.auth.switchTenant(auth, cookie, body.tenantId, clientMeta(req)),
     );
   }
 
-  private readToken(req: Request): string | undefined {
-    return readCookie(req, this.cookie.name);
+  private readCookie(req: Request): RefreshCookie {
+    return readRefreshCookie(req, this.cookie.name);
   }
 
   private send(res: Response, issued: IssuedSession): AuthResponse {
-    res.cookie(this.cookie.name, issued.refreshToken, this.cookie.options);
+    res.cookie(this.cookie.name, issued.refreshToken, {
+      ...this.cookie.options,
+      expires: issued.refreshExpiresAt,
+    });
     res.setHeader('Cache-Control', 'no-store');
     return issued.body;
   }
 
+  /** Clears the cookie, including a copy left at the pre-review path. */
   private clear(res: Response): void {
-    const { maxAge: _maxAge, ...options } = this.cookie.options;
-    res.clearCookie(this.cookie.name, options);
+    res.clearCookie(this.cookie.name, this.cookie.options);
+    res.clearCookie(this.cookie.name, { ...this.cookie.options, path: LEGACY_REFRESH_COOKIE_PATH });
   }
 }
-
-/** Documented for Swagger users: cookie endpoints need this header. */
-export const CSRF_HEADER_DOC = CSRF_HEADER;

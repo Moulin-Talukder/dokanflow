@@ -6,7 +6,7 @@ export function testEnv(overrides: Record<string, string> = {}): ApiEnv {
     NODE_ENV: 'test',
     DATABASE_URL: 'postgresql://app_user:x@127.0.0.1:1/unit',
     REDIS_URL: 'redis://127.0.0.1:1',
-    JWT_ACCESS_SECRET: 'unit-test-secret-unit-test-secret-0123',
+    JWT_ACCESS_SECRET: 'Yv7Qk2Lp9Xr4Tn8Bw1Hc6Md3Fz5Sg0Ja7Ue2Ko9Ri4Wt6Nb',
     API_CORS_ORIGINS: 'http://localhost:3000',
     ...overrides,
   });

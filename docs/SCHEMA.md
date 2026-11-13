@@ -3,7 +3,7 @@
 This is the planned schema. Each roadmap phase adds only the tables it needs. The column lists show the important columns, not every index and constraint.
 
 - **Phase 1** has no tables. It ships one migration that grants table privileges to the runtime role.
-- **Phase 2** adds `users`, `tenants`, `branches`, `memberships` and `refresh_tokens`, plus the RLS helper functions and policies.
+- **Phase 2** adds `users`, `tenants`, `branches`, `memberships`, `auth_sessions` and `refresh_tokens`, plus the RLS helper functions and policies.
 
 ## Global conventions
 
@@ -48,32 +48,38 @@ When the context is missing, both return `NULL`, every policy comparison is fals
 
 ### Phase 2: auth, tenants and RBAC
 
-| Table            | RLS                                                     | Key columns                                                                                                                                                                                                                                                                                                            |
-| ---------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`          | no (global identity, see below)                         | `name`, `email` unique (stored lowercased, nullable), `phone` unique (normalized E.164, nullable), `CHECK (email IS NOT NULL OR phone IS NOT NULL)`, `password_hash` (Argon2id), `must_change_password`, `password_changed_at`, `managed_by_tenant_id` (set for staff created by an owner), `last_tenant_id`, `status` |
-| `tenants`        | no (global, see below)                                  | `name`, `status`, `timezone` default `Asia/Dhaka`                                                                                                                                                                                                                                                                      |
-| `branches`       | yes                                                     | `name`, `is_default`; one default branch per tenant (partial unique index). Created with the tenant                                                                                                                                                                                                                    |
-| `memberships`    | yes, plus a self-read policy                            | `user_id`, `role` enum(`owner`,`manager`,`cashier`); unique `(tenant_id, user_id)`                                                                                                                                                                                                                                     |
-| `refresh_tokens` | no (looked up by hash before any tenant context exists) | `user_id`, `tenant_id` (the session's active shop), `token_hash` unique (SHA-256 of the opaque token), `family_id`, `replaced_by_id`, `expires_at`, `revoked_at`, `user_agent`, `ip`                                                                                                                                   |
+| Table            | RLS                                                     | Key columns                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`          | no (global identity, see below)                         | `name`, `email` unique (stored lowercased, nullable), `phone` unique (normalized E.164, nullable), `CHECK (email IS NOT NULL OR phone IS NOT NULL)`, `password_hash` (Argon2id), `must_change_password`, `password_changed_at` (informational only), `managed_by_tenant_id` (set for staff created by an owner; cleared when they start their own business), `last_tenant_id`, `status` |
+| `tenants`        | no (global, see below)                                  | `name`, `status`, `timezone` default `Asia/Dhaka`                                                                                                                                                                                                                                                                                                                                       |
+| `branches`       | yes                                                     | `name`, `is_default` (TRUE or NULL, never FALSE); unique `(tenant_id, is_default)` allows one default branch per tenant. Created with the tenant                                                                                                                                                                                                                                        |
+| `memberships`    | yes, plus a self-read policy                            | `user_id`, `role` enum(`owner`,`manager`,`cashier`); unique `(tenant_id, user_id)`                                                                                                                                                                                                                                                                                                      |
+| `auth_sessions`  | no (checked before and alongside tenant context)        | one row per login: `user_id`, `expires_at` (absolute end, fixed at login), `revoked_at`                                                                                                                                                                                                                                                                                                 |
+| `refresh_tokens` | no (looked up by hash before any tenant context exists) | `user_id`, `tenant_id` (the session's active shop), `session_id`, `token_hash` unique (SHA-256 of the opaque token), `replaced_by_id`, `expires_at` (never later than the session's), `revoked_at`, `user_agent`, `ip`                                                                                                                                                                  |
 
-**Global tables.** `users`, `tenants` and `refresh_tokens` have no RLS because they are read before a tenant context exists (login, refresh). The API only touches them through the auth, user and tenant services, and never returns `password_hash` or `token_hash`.
+**Global tables.** `users`, `tenants`, `auth_sessions` and `refresh_tokens` have no RLS because they are read before a tenant context exists (login, refresh). The API only touches them through the auth, user and tenant services, and never returns `password_hash` or `token_hash`.
 
 **Membership policies.**
 
 - `memberships_tenant_isolation` (all commands): `tenant_id = app_current_tenant_id()`.
 - `memberships_self_read` (`SELECT` only): `user_id = app_current_user_id()`. This lets a user list their own memberships in every shop for the shop switcher. Policies of the same command are OR'd, but writes still require the tenant context.
+- The tenant context only ever comes from a server-signed access token or server-side data. A shop id from a request (switch-tenant) is checked against the user's own memberships with **user context only**, before anything else.
 
-**Refresh-token rotation and reuse detection.**
+**Sessions, rotation and reuse detection.**
 
-- Each successful refresh locks the presented token row (`FOR UPDATE`), marks it replaced, and issues a new token in the same family.
-- Presenting a token that is already replaced or revoked is treated as theft. It revokes every token in that family, and the request fails with 401.
-- Two tabs refreshing at the same moment with the same token will log that session out. This is the deliberate, strict behaviour.
+- Login starts an `auth_sessions` row whose `expires_at` (`SESSION_MAX_AGE_DAYS`, default 30) never changes.
+- Each successful refresh locks the presented token and its session (`FOR UPDATE`), marks the token replaced, and issues a new one in the same session that expires at `min(now + REFRESH_TOKEN_TTL_DAYS, session expires_at)`. Rotation can therefore never extend a session.
+- Presenting a token that is already replaced or revoked, or whose session is revoked, is treated as theft: the whole session is revoked and the request fails with 401.
+- Two tabs refreshing at the same moment with the same token would log that session out. The web app serializes refreshes across tabs to avoid this.
 
-**Access tokens.** These are JWTs (HS256, 15 minutes) with `sub` (user), `tid` (active tenant) and `sid` (refresh-token family). Each request re-reads the membership and user, so these changes take effect immediately:
+**Access tokens.** JWTs (HS256, 15 minutes) with `sub` (user), `tid` (active tenant) and `sid` (session). Each request re-reads the membership, the user and the session, so these take effect immediately, with no timestamp comparisons (and so no clock skew between API and database):
 
-- removing a role or membership
-- disabling a user
-- a password change or reset, because tokens issued before `password_changed_at` are rejected
+- removing a role or membership, or disabling a user
+- logout and refresh-token reuse (the session is revoked)
+- a password change or reset (all of the user's sessions are revoked in the same transaction as the password update)
+- the session reaching its absolute `expires_at`
+
+**Rate limits and password hashing.** Login, register, refresh, change-password and staff password reset are rate-limited in Redis per client IP and per identifier (normalized email or phone, session, account or target user; stored as hashes). Exceeding a limit returns 429 with `Retry-After`. If Redis is unavailable the limiter allows the request and logs it. Argon2 runs at most `PASSWORD_HASH_CONCURRENCY` (default 4) at a time with a bounded queue (`PASSWORD_HASH_QUEUE`); beyond that the API answers 503 instead of exhausting memory.
 
 ### Phase 3: products and inventory
 
@@ -182,8 +188,8 @@ These are implemented in Phase 2.
 
 - **Staff identifiers by role:** a manager account needs an email; a cashier account needs a phone. Login accepts either identifier: if it contains `@` it is looked up as an email, otherwise as a normalized phone.
 - **Existing people cannot be added as staff:** creating staff with an email or phone that already belongs to a user fails with 409. Adding an existing person to another shop needs their consent, which needs invite links (out of scope). A user can still belong to several shops by creating another business from their own account.
-- **Who can reset a password:** an owner can reset a staff password only when the staff account was created by that owner's shop (`managed_by_tenant_id`) and the person belongs to no other shop. Otherwise, the owner of one shop could take over an account that owns or works at another shop.
-- **What a reset or change does:** it sets `must_change_password`, updates `password_changed_at` (which invalidates existing access tokens), and revokes all of that user's refresh tokens.
+- **Who can reset a password:** an owner can reset a staff password only while the account is managed by that owner's shop (`managed_by_tenant_id`), and never an owner's. A managed account can only join another shop by starting its own business, which clears `managed_by_tenant_id` in the same transaction. So "managed by this shop" also means "belongs to no other shop", and the reset is one conditional update in the shop's own context, with no look at other shops. Otherwise, the owner of one shop could take over an account that owns or works at another shop.
+- **What a reset or change does:** in one transaction it updates the password (a reset also sets `must_change_password`) and revokes all of that user's sessions and refresh tokens, which invalidates their access tokens immediately.
 - **First-login gate:** while `must_change_password` is true, every API endpoint except `GET /auth/me`, `POST /auth/change-password` and `POST /auth/logout` returns 403 with code `PASSWORD_CHANGE_REQUIRED`.
 
 ### Still open

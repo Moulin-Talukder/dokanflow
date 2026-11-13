@@ -59,6 +59,7 @@ describe('auth, tenants and RBAC (integration)', () => {
     it('creates an owner, a business and an httpOnly refresh cookie', async () => {
       const res = await request(server)
         .post('/api/auth/register')
+        .set(CSRF)
         .send({
           businessName: 'Rahim Store',
           name: 'Rahim',
@@ -70,7 +71,8 @@ describe('auth, tenants and RBAC (integration)', () => {
       const cookieHeader = (res.headers['set-cookie'] as unknown as string[]).join('\n');
       expect(cookieHeader).toMatch(/dokanflow_rt=[\w-]+;/);
       expect(cookieHeader).toMatch(/HttpOnly/);
-      expect(cookieHeader).toMatch(/Path=\/api\/auth/);
+      expect(cookieHeader).toMatch(/Path=\/;/);
+      expect(cookieHeader).toMatch(/Expires=/);
       expect(cookieHeader).toMatch(/SameSite=Strict/);
       expect(res.headers['cache-control']).toBe('no-store');
 
@@ -85,6 +87,7 @@ describe('auth, tenants and RBAC (integration)', () => {
       const owner = await registerOwner(server, 'dup');
       await request(server)
         .post('/api/auth/register')
+        .set(CSRF)
         .send({ businessName: 'X', name: 'X', email: owner.email, password: 'another-password' })
         .expect(409);
     });
@@ -93,10 +96,12 @@ describe('auth, tenants and RBAC (integration)', () => {
       const owner = await registerOwner(server, 'login');
       const wrong = await request(server)
         .post('/api/auth/login')
+        .set(CSRF)
         .send({ identifier: owner.email, password: 'wrong-password' })
         .expect(401);
       const unknown = await request(server)
         .post('/api/auth/login')
+        .set(CSRF)
         .send({ identifier: uniqueEmail('nobody'), password: 'wrong-password' })
         .expect(401);
       expect(apiErrorSchema.parse(wrong.body).error.message).toBe(

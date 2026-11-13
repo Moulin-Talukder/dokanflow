@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { weakSecretReason } from './secret-strength.js';
 
 const originSchema = z.url({ protocol: /^https?$/ }).transform((value) => new URL(value).origin);
 
@@ -26,7 +27,21 @@ const apiEnvObjectSchema = z.object({
   /** HMAC key for access tokens (HS256). At least 32 characters of random data. */
   JWT_ACCESS_SECRET: z.string().min(32, 'Must be at least 32 characters'),
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
-  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+  /** Idle lifetime of a refresh token. Each rotation issues a new one, capped by the session. */
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(14),
+  /** Absolute lifetime of a login session. Rotation never extends it. */
+  SESSION_MAX_AGE_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  /** Argon2 hashes allowed to run at once (~19 MiB each). */
+  PASSWORD_HASH_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+  /** Password operations allowed to wait for a slot; beyond this, 503. */
+  PASSWORD_HASH_QUEUE: z.coerce.number().int().min(0).max(10_000).default(32),
+  /** Multiplies every rate limit (tests use a large value). 1 in production. */
+  RATE_LIMIT_SCALE: z.coerce.number().int().min(1).max(100_000).default(1),
+  /** Prefix for rate-limit keys in Redis (tests use a unique one per run). */
+  RATE_LIMIT_KEY_PREFIX: z
+    .string()
+    .regex(/^[a-z0-9:_-]{1,40}$/)
+    .default('rl'),
   /** Defaults to true in production and false elsewhere (http://localhost). */
   AUTH_COOKIE_SECURE: booleanString.optional(),
   /**
@@ -45,6 +60,19 @@ export const apiEnvSchema = apiEnvObjectSchema
     AUTH_COOKIE_SECURE: env.AUTH_COOKIE_SECURE ?? env.NODE_ENV === 'production',
   }))
   .superRefine((env, ctx) => {
+    if (env.NODE_ENV === 'production') {
+      const reason = weakSecretReason(env.JWT_ACCESS_SECRET);
+      if (reason) {
+        ctx.addIssue({ code: 'custom', path: ['JWT_ACCESS_SECRET'], message: reason });
+      }
+      if (env.RATE_LIMIT_SCALE !== 1) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['RATE_LIMIT_SCALE'],
+          message: 'Must be 1 in production',
+        });
+      }
+    }
     if (env.NODE_ENV === 'production' && !env.AUTH_COOKIE_SECURE) {
       ctx.addIssue({
         code: 'custom',

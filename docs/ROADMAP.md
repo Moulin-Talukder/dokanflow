@@ -58,6 +58,13 @@ Each phase is done when lint, type-check and tests pass, and the phase can be de
 - Redis-backed rate limiting (stricter on auth and payment endpoints)
 - Audit log of sensitive actions, plus an owner-only audit view
 - Tests: cache invalidation, rate-limit behaviour, audit entries written
+- Deferred from the Phase 2 security review:
+  - **Account enumeration (7):** registration and staff creation return 409 for an existing email or phone, so anyone can probe whether an account exists. Return a neutral response (or verify ownership first) and rely on rate limits.
+  - **Temporary passwords never expire (14):** add an expiry (e.g. 72 hours) after which the owner must issue a new one.
+  - **Session and refresh-token retention (15):** purge expired and revoked `auth_sessions` and `refresh_tokens` (with their IPs and user agents) on a schedule.
+  - **Strict reuse detection on lost responses (16):** a client retry after a lost refresh response looks like reuse and ends the session. Consider a short grace window that returns the already-issued successor instead.
+  - **Self-read policy in tenant-scoped queries (21):** while `app.user_id` is set, memberships queries also see the user's own memberships in other shops; a query that forgets its tenant filter mixes them in. Set `app.user_id` only where the self-read is needed, or scope the policy to requests without a tenant context.
+  - **Failed-login and security-event logging (23):** record failed logins, rate-limit hits and refresh-token reuse in `audit_logs` (or a security log) for monitoring.
 
 ## Phase 8: Testing, deployment and README
 
@@ -65,3 +72,9 @@ Each phase is done when lint, type-check and tests pass, and the phase can be de
 - Production Dockerfiles; deployment configuration and docs
 - Seed and demo data
 - README: architecture diagram, setup, design decisions (RLS, locking, idempotency), screenshots
+- Deferred from the Phase 2 security review:
+  - **Web security headers (8):** add a Content-Security-Policy, `frame-ancestors 'none'`, `Referrer-Policy` and related headers to the Next.js app; keeping the access token in memory depends on XSS resistance.
+  - **Database-level protection for global tables (9):** `app_user` can read every `password_hash` and update any `tenants` row. Consider column privileges, a separate credentials table, or RLS with a narrow login function.
+  - **Public Swagger and health detail (17):** disable or protect `/api/docs` in production, and reduce `/api/health` to a status for public callers.
+  - **Email verification (18):** verify email ownership at registration, so nobody can squat another person's email.
+  - **Proxy-aware client IPs (22):** configure Express `trust proxy` for the deployment, so sessions and per-IP rate limits see the real client IP rather than the proxy's.

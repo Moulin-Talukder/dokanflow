@@ -33,12 +33,20 @@ export interface TestApp {
  */
 const targets = resolveIntegrationTestTargets(process.env);
 
-/** Boots the real application (same module, adapter and setup as main.ts) against the test database. */
-export async function createTestApp(): Promise<TestApp> {
+/**
+ * Boots the real application (same module, adapter and setup as main.ts) against
+ * the test database. Rate limits are scaled up and namespaced per app instance, so
+ * flow tests sharing 127.0.0.1 do not trip them; the rate-limit tests pass
+ * `{ RATE_LIMIT_SCALE: '1' }` to exercise the real limits.
+ */
+export async function createTestApp(overrides: Record<string, string> = {}): Promise<TestApp> {
   const env = parseApiEnv({
-    JWT_ACCESS_SECRET: 'integration-test-secret-0123456789abcdef',
+    JWT_ACCESS_SECRET: 'Pq8Wn3Zx6Lt1Rb9Kv4Hy7Dm2Sf5Gc0Ju3Ne8Ta6Xo1Ql4Vi',
     API_CORS_ORIGINS: 'http://localhost:3000',
+    RATE_LIMIT_SCALE: '1000',
     ...process.env,
+    RATE_LIMIT_KEY_PREFIX: `rl-test-${randomUUID().slice(0, 8)}`,
+    ...overrides,
     DATABASE_URL: targets.databaseUrl,
     REDIS_URL: targets.redisUrl,
     NODE_ENV: 'test',
@@ -95,6 +103,7 @@ export async function registerOwner(
   const password = `pw-${randomUUID()}`;
   const res = await request(server)
     .post('/api/auth/register')
+    .set(CSRF)
     .send({ businessName: `${label} Store`, name: `${label} Owner`, email, password })
     .expect(201);
   return { ...toSession(res), email, password };
@@ -107,6 +116,7 @@ export async function login(
 ): Promise<Session> {
   const res = await request(server)
     .post('/api/auth/login')
+    .set(CSRF)
     .send({ identifier, password })
     .expect(200);
   return toSession(res);

@@ -155,11 +155,12 @@ Before running any `git push`, do ALL of these checks. If any check fails, STOP 
 
 2. Check the unpushed commits: run
    git log @{u}..HEAD --format="%h | %an <%ae> | %cn <%ce>"
-   (if there is no upstream yet, use: git log --format="%h | %an <%ae> | %cn <%ce>")
+   (if there is no upstream yet, use: git log origin/main..HEAD --format="%h | %an <%ae> | %cn <%ce>")
    Every author AND committer must be "Moulin Talukder <rock.oronno@gmail.com>".
 
 3. Check for attribution: run
    git log @{u}..HEAD --format="%B" | grep -ci -E "claude|anthropic|co-authored-by"
+   (if there is no upstream yet, use: git log origin/main..HEAD --format="%B" | grep -ci -E "claude|anthropic|co-authored-by")
    The result must be 0. If any unpushed commit has a "Co-Authored-By: Claude" line or any
    "Generated with Claude" text, show me which commits have it, remove it from those
    unpushed commits only, and show me the result before pushing.
@@ -167,9 +168,11 @@ Before running any `git push`, do ALL of these checks. If any check fails, STOP 
 4. Never add Co-Authored-By, "Generated with Claude Code", or any Claude/Anthropic
    attribution to commit messages or PR descriptions.
 
-5. Push only with my existing local git credentials (Git Credential Manager).
+5. Pushing uses only my existing local git credentials (Git Credential Manager).
+   GitHub API work (pull requests, checks) uses only my own gh CLI login.
    Never use any other account, token, GitHub App, or Claude account.
-   If authentication fails, stop and tell me. Do not try anything else.
+   If gh is not installed or not logged in, or if authentication fails, stop and tell me.
+   Do not try anything else.
 
 6. Never use `git push --force`, `--force-with-lease`, or `--all`, and never rewrite
    commits that are already pushed, unless I explicitly ask in that message.
@@ -177,3 +180,16 @@ Before running any `git push`, do ALL of these checks. If any check fails, STOP 
 
 7. Before pushing, show me a short summary: the branch name, the number of commits,
    and the output of checks 2 and 3. Then push.
+
+## Merge workflow (always follow after pushing a phase branch)
+
+1. Open a pull request into main with gh, using the PR description, with no attribution.
+2. Wait for all CI checks with `gh pr checks --watch`. If any check fails, read the log with gh,
+   fix the cause on the same branch, push following the push rules, and wait again. Never weaken,
+   skip or delete a test. After 3 failed attempts, stop and tell me.
+3. When all checks pass, merge locally with a fast-forward only: switch to main, pull, then
+   `git merge --ff-only <branch>`. If a fast-forward is not possible, stop and tell me. Never use
+   the GitHub merge button or `gh pr merge`, because they create commits that are not authored by me.
+4. Run push checks 1 to 3 on main against origin/main, then push main.
+5. Confirm with gh that the pull request shows as merged. Then delete the branch on GitHub and locally.
+6. Report the PR link, the CI result, the commits merged, and the check 2 output.

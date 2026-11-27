@@ -66,17 +66,26 @@ describe('products and inventory (integration)', () => {
     return productSchema.parse(res.body);
   }
 
-  function stockIn(token: string, productId: string, quantity: number) {
+  /** Each call is a new request, so each gets its own Idempotency-Key. */
+  function stockIn(token: string, productId: string, quantity: number, key: string = randomUUID()) {
     return request(server)
       .post(`/api/products/${productId}/stock/in`)
       .set(...auth(token))
+      .set('idempotency-key', key)
       .send({ quantity });
   }
 
-  function adjust(token: string, productId: string, delta: number, reason = 'Shelf count') {
+  function adjust(
+    token: string,
+    productId: string,
+    delta: number,
+    reason = 'Shelf count',
+    key: string = randomUUID(),
+  ) {
     return request(server)
       .post(`/api/products/${productId}/stock/adjustments`)
       .set(...auth(token))
+      .set('idempotency-key', key)
       .send({ delta, reason });
   }
 

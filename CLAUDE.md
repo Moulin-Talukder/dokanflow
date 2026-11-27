@@ -58,6 +58,13 @@ Multi-tenant POS and inventory SaaS for small Bangladeshi retail businesses (dok
 - **List endpoints** return `{ items, page, pageSize, total }` (`paginatedSchema`), with `pageSize` capped at `PAGE_SIZE_MAX`.
 - **Web catalogue queries** use keys from `catalogKey(tenantId, ...)`, so switching shops never shows another shop's cached data.
 
+### Code conventions established in Phase 4
+
+- **Sale arithmetic lives only in `calculateSale` (`@dokanflow/shared`).** The POS uses it for live totals; the API recomputes with it from locked current prices and never trusts client totals. Database triggers re-check the totals at commit.
+- **Idempotent writes** take `@IdempotencyKey()` and use `claimIdempotencyKey` / `completeIdempotencyKey` inside the same transaction; replays answer 200 via `markReplay`. Web clients send `Idempotency-Key` (`IDEMPOTENCY_HEADER`) with one key per attempt.
+- **Financial rows are immutable.** Correct a sale by voiding it (`sale_void` movements), never by updating or deleting rows.
+- **Errors that concern specific fields** carry `issues` (e.g. `lines.2.quantity`) on `ApiHttpException`, so the UI can point at the right line.
+
 ## Core rules (non-negotiable)
 
 1. **Strict TypeScript.** `strict: true` everywhere, no `any`. Use `unknown` and narrow it.

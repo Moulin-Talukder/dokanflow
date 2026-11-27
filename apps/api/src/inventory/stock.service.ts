@@ -12,6 +12,7 @@ import {
 } from '@dokanflow/shared';
 import type { AuthContext } from '../auth/auth-context.js';
 import { ApiHttpException } from '../common/api-http.exception.js';
+import { claimIdempotencyKey, completeIdempotencyKey, requestHash } from '../common/idempotency.js';
 import { PrismaService } from '../infra/prisma.service.js';
 import { mapInventoryDbError } from './db-errors.js';
 import { defaultBranchId } from './default-branch.js';
@@ -26,7 +27,7 @@ const movementSelect = {
   actor: { select: { id: true, name: true } },
 } as const;
 
-function toMovement(row: {
+interface MovementRow {
   id: string;
   type: StockMovement['type'];
   quantityDelta: number;
@@ -34,14 +35,23 @@ function toMovement(row: {
   reason: string | null;
   createdAt: Date;
   actor: { id: string; name: string };
-}): StockMovement {
+}
+
+function toMovement(row: MovementRow): StockMovement {
   return { ...row, createdAt: row.createdAt.toISOString() };
+}
+
+export interface StockChangeResult {
+  response: StockChangeResponse;
+  /** True when the Idempotency-Key was seen before and the original result is returned. */
+  replayed: boolean;
 }
 
 /**
  * Stock changes. Every change is one stock_movements row; the database trigger
- * applies it to stock_levels. Here the level is locked and checked first so the
- * caller gets a clear 409 instead of a trigger error.
+ * applies it to stock_levels. Here the product is locked and the level checked
+ * first so the caller gets a clear 409 instead of a trigger error. Changes are
+ * idempotent by key, so a retried request never adds or removes stock twice.
  */
 @Injectable()
 export class StockService {
@@ -50,25 +60,33 @@ export class StockService {
   stockIn(
     auth: AuthContext,
     productId: string,
+    idempotencyKey: string,
     input: StockInRequest,
-  ): Promise<StockChangeResponse> {
-    return this.record(auth, productId, {
-      type: 'purchase',
-      delta: input.quantity,
-      reason: input.note ?? null,
-    });
+  ): Promise<StockChangeResult> {
+    return this.record(
+      auth,
+      productId,
+      { scope: 'stock-in', key: idempotencyKey, body: input },
+      {
+        type: 'purchase',
+        delta: input.quantity,
+        reason: input.note ?? null,
+      },
+    );
   }
 
   adjust(
     auth: AuthContext,
     productId: string,
+    idempotencyKey: string,
     input: StockAdjustmentRequest,
-  ): Promise<StockChangeResponse> {
-    return this.record(auth, productId, {
-      type: 'adjustment',
-      delta: input.delta,
-      reason: input.reason,
-    });
+  ): Promise<StockChangeResult> {
+    return this.record(
+      auth,
+      productId,
+      { scope: 'stock-adjustment', key: idempotencyKey, body: input },
+      { type: 'adjustment', delta: input.delta, reason: input.reason },
+    );
   }
 
   async movements(
@@ -96,11 +114,26 @@ export class StockService {
   private async record(
     auth: AuthContext,
     productId: string,
+    idempotency: { scope: 'stock-in' | 'stock-adjustment'; key: string; body: unknown },
     change: { type: 'purchase' | 'adjustment'; delta: number; reason: string | null },
-  ): Promise<StockChangeResponse> {
+  ): Promise<StockChangeResult> {
     try {
       return await withDbContext(this.prisma.client, auth, async (tx) => {
         const product = await this.findProduct(tx, productId);
+        const claim = await claimIdempotencyKey(
+          tx,
+          auth.tenantId,
+          idempotency.scope,
+          idempotency.key,
+          requestHash({ productId, body: idempotency.body }),
+        );
+        if (claim.status === 'replay') {
+          const original = await tx.stockMovement.findUniqueOrThrow({
+            where: { id: claim.resourceId },
+            select: movementSelect,
+          });
+          return { response: toResponse(original, product.lowStockThreshold), replayed: true };
+        }
         if (product.archivedAt !== null) {
           throw new ConflictException('Restore the product before changing its stock');
         }
@@ -135,11 +168,14 @@ export class StockService {
           },
           select: movementSelect,
         });
-        return {
-          stockQuantity: movement.quantityAfter,
-          isLowStock: isLowStock(movement.quantityAfter, product.lowStockThreshold),
-          movement: toMovement(movement),
-        };
+        await completeIdempotencyKey(
+          tx,
+          auth.tenantId,
+          idempotency.scope,
+          idempotency.key,
+          movement.id,
+        );
+        return { response: toResponse(movement, product.lowStockThreshold), replayed: false };
       });
     } catch (error) {
       if (
@@ -163,4 +199,12 @@ export class StockService {
     }
     return product;
   }
+}
+
+function toResponse(movement: MovementRow, lowStockThreshold: number | null): StockChangeResponse {
+  return {
+    stockQuantity: movement.quantityAfter,
+    isLowStock: isLowStock(movement.quantityAfter, lowStockThreshold),
+    movement: toMovement(movement),
+  };
 }

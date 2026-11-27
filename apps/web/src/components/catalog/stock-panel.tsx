@@ -2,6 +2,7 @@
 
 import {
   formatDisplayQuantity,
+  IDEMPOTENCY_HEADER,
   parseDisplayQuantity,
   type Product,
   stockChangeResponseSchema,
@@ -101,6 +102,8 @@ function StockInForm({ product }: { product: Product }) {
       client.request('POST', `/products/${product.id}/stock/in`, {
         body,
         schema: stockChangeResponseSchema,
+        // One key per submission: the server applies it once even if the request is retried.
+        headers: { [IDEMPOTENCY_HEADER]: crypto.randomUUID() },
       }),
     onSuccess: async (result) => {
       setMessage({
@@ -180,6 +183,7 @@ function AdjustForm({ product }: { product: Product }) {
       client.request('POST', `/products/${product.id}/stock/adjustments`, {
         body,
         schema: stockChangeResponseSchema,
+        headers: { [IDEMPOTENCY_HEADER]: crypto.randomUUID() },
       }),
     onSuccess: async (result) => {
       setMessage({

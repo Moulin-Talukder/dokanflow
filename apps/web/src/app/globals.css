@@ -387,3 +387,199 @@ td {
   cursor: default;
   text-decoration: none;
 }
+
+/* --- POS, sales and invoice (Phase 4) --- */
+
+.small {
+  font-size: 0.8rem;
+}
+
+.button-large {
+  font-size: 1.1rem;
+  padding: 0.8rem 1rem;
+  width: 100%;
+}
+
+.button-danger {
+  background: var(--danger-fg);
+  color: var(--card);
+}
+
+.pos {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr) minmax(16rem, 1fr);
+  align-items: start;
+}
+
+.app-header ~ .container:has(.pos) {
+  max-width: 90rem;
+}
+
+@media (max-width: 70rem) {
+  .pos {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pos-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--card);
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.pos-results li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.7rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.pos-results li.active,
+.pos-results li:hover {
+  background: var(--success-bg);
+}
+
+.pos-input {
+  width: 7.5rem;
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.pos-table tr.has-issue td {
+  background: var(--danger-bg);
+}
+
+.pos-change {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.totals {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.3rem 1rem;
+  margin: 0;
+}
+
+.totals dt {
+  color: var(--muted);
+}
+
+.totals dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.totals .grand {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.sale-lines {
+  margin-bottom: 1rem;
+}
+
+.invoice-toolbar {
+  margin-bottom: 1rem;
+}
+
+.button-link.active {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.invoice {
+  background: #ffffff;
+  color: #111111;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+}
+
+.invoice-page.a4 .invoice {
+  max-width: 48rem;
+}
+
+.invoice-page.receipt .invoice {
+  max-width: 80mm;
+  padding: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.invoice-page.receipt .invoice h1 {
+  font-size: 1.1rem;
+}
+
+.invoice-header {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.invoice-header h1 {
+  margin: 0 0 0.3rem;
+}
+
+.invoice .muted,
+.invoice .totals dt {
+  color: #555555;
+}
+
+.invoice th,
+.invoice td {
+  border-bottom: 1px dashed #bbbbbb;
+  padding: 0.3rem 0.2rem;
+}
+
+.invoice .totals .grand {
+  color: #111111;
+}
+
+.invoice-footer {
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.voided-stamp {
+  display: inline-block;
+  border: 3px solid #b91c1c;
+  color: #b91c1c;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  padding: 0.2rem 0.8rem;
+  transform: rotate(-4deg);
+}
+
+@media print {
+  .app-header,
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff;
+  }
+
+  .app-header ~ .container {
+    max-width: none;
+    padding: 0;
+  }
+
+  .invoice {
+    border: 0;
+    padding: 0;
+    max-width: none !important;
+  }
+}

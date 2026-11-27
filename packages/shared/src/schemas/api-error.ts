@@ -14,6 +14,12 @@ export const apiErrorCodeSchema = z.enum([
   'INSUFFICIENT_STOCK',
   /** The product's unit cannot change after stock has moved. */
   'UNIT_LOCKED',
+  /** The server's total differs from the one the client showed (prices changed). */
+  'TOTAL_MISMATCH',
+  /** The idempotency key was already used for a different request. */
+  'IDEMPOTENCY_KEY_REUSED',
+  /** The sale has already been voided. */
+  'ALREADY_VOIDED',
   'TOO_MANY_REQUESTS',
   'SERVICE_UNAVAILABLE',
   'INTERNAL_ERROR',

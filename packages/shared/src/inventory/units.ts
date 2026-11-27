@@ -56,3 +56,28 @@ export function formatDisplayQuantity(baseUnits: number, unit: ProductUnit): str
     .replace(/0+$/, '');
   return `${sign}${String(whole)}${fraction ? `.${fraction}` : ''}`;
 }
+
+/** Unit suffixes accepted after a number, per product unit, and how many base units each is. */
+const SUFFIXES: Readonly<Record<ProductUnit, Readonly<Record<string, 'display' | 'base'>>>> = {
+  piece: { '': 'display', pc: 'display', pcs: 'display', piece: 'display', pieces: 'display' },
+  gram: { '': 'display', kg: 'display', g: 'base', gm: 'base', gram: 'base', grams: 'base' },
+  ml: { '': 'display', l: 'display', litre: 'display', liter: 'display', ml: 'base' },
+};
+
+/**
+ * Parses what a cashier types into base units, with an optional unit suffix:
+ * "1.5 kg" or "1.5" → 1500 g, "500 g" → 500 g, "0.5 L" → 500 ml, "250ml" → 250 ml,
+ * "3" or "3 pcs" → 3 pieces. Base-unit suffixes (g, ml) take whole numbers only.
+ * Returns null for anything else, including a suffix that does not fit the unit.
+ */
+export function parseQuantityWithUnit(input: string, unit: ProductUnit): number | null {
+  const match = /^\+?([\d.,]+)\s*([a-z]*)$/.exec(input.trim().toLowerCase());
+  if (!match?.[1]) return null;
+  const kind = SUFFIXES[unit][match[2] ?? ''];
+  if (kind === undefined) return null;
+  if (kind === 'display') return parseDisplayQuantity(match[1], unit);
+  const digits = match[1].replace(/,/g, '');
+  if (!/^\d{1,10}$/.test(digits)) return null;
+  const base = Number(digits);
+  return base <= MAX_QUANTITY ? base : null;
+}

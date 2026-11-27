@@ -10,6 +10,7 @@ import type { ApiEnv } from './config/env.js';
 import { HealthModule } from './health/health.module.js';
 import { InfraModule } from './infra/infra.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
+import { SalesModule } from './sales/sales.module.js';
 import { StaffModule } from './staff/staff.module.js';
 import { TenantsModule } from './tenants/tenants.module.js';
 
@@ -43,6 +44,7 @@ export class AppModule {
         TenantsModule,
         StaffModule,
         CatalogModule,
+        SalesModule,
       ],
       providers: [{ provide: APP_FILTER, useClass: ApiExceptionFilter }],
     };

@@ -13,6 +13,9 @@ describe('role permissions', () => {
     'catalog:write': { owner: true, manager: true, cashier: false },
     'stock:read': { owner: true, manager: true, cashier: true },
     'stock:write': { owner: true, manager: true, cashier: false },
+    'sale:create': { owner: true, manager: true, cashier: true },
+    'sale:read': { owner: true, manager: true, cashier: true },
+    'sale:void': { owner: true, manager: true, cashier: false },
   } as const;
 
   it('covers every permission in the expected matrix', () => {

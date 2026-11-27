@@ -1,8 +1,19 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Res,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
+  ApiHeader,
   ApiOkResponse,
   ApiQuery,
   ApiTags,
@@ -29,8 +40,10 @@ import {
   type UpdateProductRequest,
   updateProductRequestSchema,
 } from '@dokanflow/shared';
+import type { Response } from 'express';
 import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentAuth, RequirePermission } from '../auth/decorators.js';
+import { IdempotencyKey, markReplay } from '../common/idempotency.js';
 import { toOpenApiSchema } from '../common/openapi.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { StockService } from '../inventory/stock.service.js';
@@ -95,30 +108,47 @@ export class ProductsController {
     return this.products.update(auth, id, body);
   }
 
-  /** Stock received. Quantity in base units (pieces, grams, millilitres). */
+  /**
+   * Stock received. Quantity in base units (pieces, grams, millilitres). Requires an
+   * Idempotency-Key header; a retry returns the original result (200) instead of
+   * adding the stock twice.
+   */
   @Post(':id/stock/in')
   @RequirePermission('stock:write')
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiBody({ schema: toOpenApiSchema(stockInRequestSchema, 'input') })
   @ApiCreatedResponse({ schema: toOpenApiSchema(stockChangeResponseSchema) })
-  stockIn(
+  async stockIn(
     @CurrentAuth() auth: AuthContext,
     @Param('id', productId) id: string,
+    @IdempotencyKey() key: string,
     @Body(new ZodValidationPipe(stockInRequestSchema)) body: StockInRequest,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<StockChangeResponse> {
-    return this.stock.stockIn(auth, id, body);
+    const { response, replayed } = await this.stock.stockIn(auth, id, key, body);
+    markReplay(res, replayed);
+    return response;
   }
 
-  /** A signed correction with a required reason. Stock never goes below zero (409). */
+  /**
+   * A signed correction with a required reason. Stock never goes below zero (409).
+   * Requires an Idempotency-Key header, like stock in.
+   */
   @Post(':id/stock/adjustments')
   @RequirePermission('stock:write')
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiBody({ schema: toOpenApiSchema(stockAdjustmentRequestSchema, 'input') })
   @ApiCreatedResponse({ schema: toOpenApiSchema(stockChangeResponseSchema) })
-  adjust(
+  async adjust(
     @CurrentAuth() auth: AuthContext,
     @Param('id', productId) id: string,
+    @IdempotencyKey() key: string,
     @Body(new ZodValidationPipe(stockAdjustmentRequestSchema)) body: StockAdjustmentRequest,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<StockChangeResponse> {
-    return this.stock.adjust(auth, id, body);
+    const { response, replayed } = await this.stock.adjust(auth, id, key, body);
+    markReplay(res, replayed);
+    return response;
   }
 
   /** Movement history, newest first. */

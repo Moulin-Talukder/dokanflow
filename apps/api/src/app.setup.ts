@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { CSRF_HEADER } from '@dokanflow/shared';
+import { CSRF_HEADER, IDEMPOTENCY_HEADER } from '@dokanflow/shared';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import type { ApiEnv } from './config/env.js';
@@ -18,8 +18,14 @@ export function configureApp(app: INestApplication, env: ApiEnv): void {
   app.enableCors({
     origin: env.API_CORS_ORIGINS,
     credentials: true,
-    allowedHeaders: ['content-type', 'authorization', CSRF_HEADER, 'x-request-id'],
-    exposedHeaders: ['x-request-id'],
+    allowedHeaders: [
+      'content-type',
+      'authorization',
+      CSRF_HEADER,
+      IDEMPOTENCY_HEADER,
+      'x-request-id',
+    ],
+    exposedHeaders: ['x-request-id', 'idempotent-replayed'],
   });
   app.enableShutdownHooks();
 

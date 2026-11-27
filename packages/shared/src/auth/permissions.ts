@@ -14,6 +14,9 @@ export const PERMISSIONS = [
   'catalog:write',
   'stock:read',
   'stock:write',
+  'sale:create',
+  'sale:read',
+  'sale:void',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -27,8 +30,11 @@ export const ROLE_PERMISSIONS: Readonly<Record<MembershipRole, readonly Permissi
     'catalog:write',
     'stock:read',
     'stock:write',
+    'sale:create',
+    'sale:read',
+    'sale:void',
   ],
-  // Stock changes are "manager and above" (docs/ROADMAP.md, Phase 3).
+  // Stock changes and voids are "manager and above" (docs/ROADMAP.md).
   manager: [
     'tenant:read',
     'staff:read',
@@ -36,9 +42,13 @@ export const ROLE_PERMISSIONS: Readonly<Record<MembershipRole, readonly Permissi
     'catalog:write',
     'stock:read',
     'stock:write',
+    'sale:create',
+    'sale:read',
+    'sale:void',
   ],
-  // Cashiers read products and stock (the POS needs them) but change nothing.
-  cashier: ['tenant:read', 'catalog:read', 'stock:read'],
+  // Cashiers sell and read products, stock and sales; they cannot change stock
+  // directly or void a sale.
+  cashier: ['tenant:read', 'catalog:read', 'stock:read', 'sale:create', 'sale:read'],
 };
 
 export function permissionsFor(role: MembershipRole): readonly Permission[] {

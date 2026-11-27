@@ -7,6 +7,12 @@
 export const MAX_PRICE_POISHA = 1_000_000_000;
 
 /**
+ * Largest amount for any sale or line total: ৳20,000,000.00. Keeps every money
+ * column within a 32-bit integer in Postgres.
+ */
+export const MAX_SALE_TOTAL_POISHA = 2_000_000_000;
+
+/**
  * Parses taka text such as "120", "120.5", "1,250.75" or "৳ 99.99" into poisha.
  * Returns null for anything else (negative, more than 2 decimals, garbage).
  */

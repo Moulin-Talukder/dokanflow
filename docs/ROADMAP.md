@@ -32,7 +32,7 @@ Each phase is done when lint, type-check and tests pass, and the phase can be de
 ## Phase 4: POS and sales
 
 - Sale creation in one transaction with `FOR UPDATE` row locks and an idempotency key
-- Discounts, multiple payment methods (cash, card, mobile wallet, due), change calculation
+- Line and whole-sale discounts, cash payment with change calculation (other payment methods moved to Phase 5)
 - Per-tenant sequential invoice numbers; sale voids and returns (reversing movements)
 - Tests: concurrent sales cannot oversell, idempotent retries, totals math in poisha
 - Web: cashier POS screen (search or scan, cart, checkout) and invoice view/print
@@ -40,6 +40,7 @@ Each phase is done when lint, type-check and tests pass, and the phase can be de
 ## Phase 5: Customers, dues and payment sandbox
 
 - Customers and a due ledger (sales on credit, due collections, balance derived from the ledger)
+- Card, mobile wallet and due payment methods at the POS (the sale model already supports them)
 - `PaymentProvider` abstraction with a sandbox implementation; verified, idempotent callbacks
 - Tests: ledger correctness, duplicate and out-of-order callbacks, tenant isolation
 - Web: customer list and detail, due statement, collect-payment flow

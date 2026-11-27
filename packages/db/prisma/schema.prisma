@@ -74,6 +74,8 @@ model User {
   refreshTokens   RefreshToken[]
   sessions        AuthSession[]
   stockMovements  StockMovement[]
+  salesCashiered  Sale[]          @relation("SaleCashier")
+  salesVoided     Sale[]          @relation("SaleVoidedBy")
 
   @@map("users")
 }
@@ -87,13 +89,15 @@ model Tenant {
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  branches      Branch[]
-  memberships   Membership[]
-  refreshTokens RefreshToken[]
-  managedUsers  User[]         @relation("ManagedUsers")
-  lastUsers     User[]         @relation("LastTenant")
-  categories    Category[]
-  products      Product[]
+  branches        Branch[]
+  memberships     Membership[]
+  refreshTokens   RefreshToken[]
+  managedUsers    User[]           @relation("ManagedUsers")
+  lastUsers       User[]           @relation("LastTenant")
+  categories      Category[]
+  products        Product[]
+  invoiceCounter  InvoiceCounter?
+  idempotencyKeys IdempotencyKey[]
 
   @@map("tenants")
 }
@@ -114,6 +118,7 @@ model Branch {
   tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   stockLevels    StockLevel[]
   stockMovements StockMovement[]
+  sales          Sale[]
 
   /// Target for composite (tenant_id, branch_id) foreign keys from later tables.
   @@unique([tenantId, id])
@@ -252,6 +257,7 @@ model Product {
   category       Category?       @relation(fields: [tenantId, categoryId], references: [tenantId, id], onDelete: Restrict)
   stockLevels    StockLevel[]
   stockMovements StockMovement[]
+  saleItems      SaleItem[]
 
   @@unique([tenantId, sku])
   @@unique([tenantId, barcode])
@@ -300,4 +306,150 @@ model StockMovement {
 
   @@index([tenantId, productId, createdAt(sort: Desc)])
   @@map("stock_movements")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: POS and sales
+// CHECK constraints, column privileges, the void guard and the deferred
+// consistency triggers live in the migration SQL; see docs/SCHEMA.md.
+// ---------------------------------------------------------------------------
+
+enum SaleStatus {
+  completed
+  voided
+
+  @@map("sale_status")
+}
+
+/// Phase 4 records cash only; the other methods arrive in Phase 5.
+enum PaymentMethod {
+  cash
+  card
+  mobile_wallet
+  due
+
+  @@map("payment_method")
+}
+
+enum DiscountType {
+  amount
+  percent
+
+  @@map("discount_type")
+}
+
+/// Tenant-scoped (RLS). Immutable once written, except the void columns.
+/// Totals are verified against the lines and payments at commit (deferred trigger).
+model Sale {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId           String        @map("tenant_id") @db.Uuid
+  branchId           String        @map("branch_id") @db.Uuid
+  /// Sequential per tenant, from invoice_counters; shown as INV-000123.
+  invoiceNo          Int           @map("invoice_no")
+  status             SaleStatus    @default(completed)
+  cashierUserId      String        @map("cashier_user_id") @db.Uuid
+  subtotalPoisha     Int           @map("subtotal_poisha")
+  lineDiscountPoisha Int           @map("line_discount_poisha")
+  /// The whole-sale discount as entered (amount in poisha, or percent in basis points).
+  saleDiscountType   DiscountType? @map("sale_discount_type")
+  saleDiscountValue  Int?          @map("sale_discount_value")
+  saleDiscountPoisha Int           @map("sale_discount_poisha")
+  /// VAT contained in the total.
+  taxPoisha          Int           @map("tax_poisha")
+  totalPoisha        Int           @map("total_poisha")
+  paidPoisha         Int           @map("paid_poisha")
+  duePoisha          Int           @map("due_poisha")
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  voidedAt           DateTime?     @map("voided_at") @db.Timestamptz(3)
+  voidedByUserId     String?       @map("voided_by_user_id") @db.Uuid
+  voidReason         String?       @map("void_reason")
+
+  branch   Branch        @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  cashier  User          @relation("SaleCashier", fields: [cashierUserId], references: [id], onDelete: Restrict)
+  voidedBy User?         @relation("SaleVoidedBy", fields: [voidedByUserId], references: [id], onDelete: Restrict)
+  items    SaleItem[]
+  payments SalePayment[]
+
+  @@unique([tenantId, invoiceNo])
+  /// Target for composite (tenant_id, sale_id) foreign keys.
+  @@unique([tenantId, id])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("sales")
+}
+
+/// Tenant-scoped (RLS). Append-only. Every price, rate and name is a snapshot.
+model SaleItem {
+  id                      String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                String        @map("tenant_id") @db.Uuid
+  saleId                  String        @map("sale_id") @db.Uuid
+  lineNo                  Int           @map("line_no")
+  productId               String        @map("product_id") @db.Uuid
+  productName             String        @map("product_name")
+  productSku              String        @map("product_sku")
+  unit                    ProductUnit
+  /// Base units.
+  quantity                Int
+  unitPricePoisha         Int           @map("unit_price_poisha")
+  grossPoisha             Int           @map("gross_poisha")
+  discountType            DiscountType? @map("discount_type")
+  discountValue           Int?          @map("discount_value")
+  lineDiscountPoisha      Int           @map("line_discount_poisha")
+  saleDiscountSharePoisha Int           @map("sale_discount_share_poisha")
+  totalPoisha             Int           @map("total_poisha")
+  vatRateBp               Int?          @map("vat_rate_bp")
+  taxPoisha               Int           @map("tax_poisha")
+
+  sale    Sale    @relation(fields: [tenantId, saleId], references: [tenantId, id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([saleId, lineNo])
+  @@index([tenantId, productId])
+  @@map("sale_items")
+}
+
+/// Tenant-scoped (RLS). Append-only. One row per payment method used.
+model SalePayment {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String        @map("tenant_id") @db.Uuid
+  saleId         String        @map("sale_id") @db.Uuid
+  method         PaymentMethod
+  /// Amount applied to the sale.
+  amountPoisha   Int           @map("amount_poisha")
+  /// Cash handed over, and the change given back (cash only).
+  tenderedPoisha Int?          @map("tendered_poisha")
+  changePoisha   Int?          @map("change_poisha")
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  sale Sale @relation(fields: [tenantId, saleId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, saleId])
+  @@map("sale_payments")
+}
+
+/// Tenant-scoped (RLS). One row per tenant; incremented atomically inside the sale
+/// transaction, so invoice numbers are sequential and gap-free.
+model InvoiceCounter {
+  tenantId  String @id @map("tenant_id") @db.Uuid
+  lastValue Int    @map("last_value")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@map("invoice_counters")
+}
+
+/// Tenant-scoped (RLS). One row per idempotent request: the hash of what was asked
+/// and the id of what was created, so a retry returns the original result.
+model IdempotencyKey {
+  tenantId    String   @map("tenant_id") @db.Uuid
+  /// What the key was used for, e.g. "sale" or "stock-in".
+  scope       String
+  key         String
+  requestHash String   @map("request_hash")
+  resourceId  String?  @map("resource_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@id([tenantId, scope, key])
+  @@map("idempotency_keys")
 }

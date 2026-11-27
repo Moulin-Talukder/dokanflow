@@ -34,6 +34,8 @@ interface RequestOptions<T> {
   body?: unknown;
   schema?: z.ZodType<T>;
   signal?: AbortSignal;
+  /** Extra headers, e.g. Idempotency-Key. */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -133,7 +135,7 @@ export class AuthClient {
   }
 
   private send(method: string, path: string, options: RequestOptions<unknown>): Promise<Response> {
-    const headers: Record<string, string> = { accept: 'application/json' };
+    const headers: Record<string, string> = { accept: 'application/json', ...options.headers };
     if (options.body !== undefined) headers['content-type'] = 'application/json';
     if (this.accessToken) headers.authorization = `Bearer ${this.accessToken}`;
     return this.fetchImpl(`${this.options.baseUrl}${path}`, {

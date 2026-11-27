@@ -20,6 +20,11 @@ export const VALIDATION_MESSAGES_EN = {
   'validation.tooLarge': 'Too large',
   'validation.reasonRequired': 'Give a reason (at least 3 characters)',
   'validation.noChanges': 'Nothing to change',
+  'validation.emptyCart': 'Add at least one item',
+  'validation.duplicateProduct': 'Each product can appear only once; change its quantity instead',
+  'validation.idempotencyKey': 'Send an Idempotency-Key header (8–100 letters, digits, - or _)',
+  'validation.date': 'Use a date like 2026-11-27',
+  'validation.paymentShort': 'The amount received is less than the total',
 } as const;
 
 export type ValidationMessageKey = keyof typeof VALIDATION_MESSAGES_EN;

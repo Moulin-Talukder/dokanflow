@@ -59,6 +59,9 @@ export function toApiError(error: unknown, requestId?: string): ApiErrorResult {
   } else if (exception instanceof HttpException) {
     status = exception.getStatus();
     code = exception instanceof ApiHttpException ? exception.code : codeFor(status);
+    if (exception instanceof ApiHttpException && exception.issues) {
+      issues = [...exception.issues];
+    }
     // Messages of 5xx HttpExceptions can carry internals; keep them server-side.
     message = status >= 500 ? message : messageFromHttpException(exception);
     if (status === 503) {

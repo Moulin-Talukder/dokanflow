@@ -4,6 +4,7 @@ This is the planned schema. Each roadmap phase adds only the tables it needs. Th
 
 - **Phase 1** has no tables. It ships one migration that grants table privileges to the runtime role.
 - **Phase 2** adds `users`, `tenants`, `branches`, `memberships`, `auth_sessions` and `refresh_tokens`, plus the RLS helper functions and policies.
+- **Phase 3** adds `categories`, `products`, `stock_levels` and `stock_movements`, with RLS, the stock trigger and the unit-lock trigger.
 
 ## Global conventions
 
@@ -90,8 +91,18 @@ When the context is missing, both return `NULL`, every policy comparison is fals
 | `stock_levels`    | `branch_id`, `product_id`, `quantity` (base units, `CHECK (quantity >= 0)`); PK `(tenant_id, branch_id, product_id)`. This is the row that sales lock                                                                                                                               |
 | `stock_movements` | append-only: `branch_id`, `product_id`, `type` enum(`opening`,`purchase`,`adjustment`,`sale`,`sale_void`,`return`), `quantity_delta`, `quantity_after`, `reference_type`, `reference_id`, `reason`, `actor_user_id`, `created_at`                                                   |
 
-- **Invariant:** for each `(branch, product)`, `stock_levels.quantity` equals the sum of `stock_movements.quantity_delta`. A test and a reconciliation query check it.
-- **Unit lock:** a product's `unit` cannot change once it has any stock movement. A trigger enforces this, and the API also rejects the change with 409.
+How the rules are enforced (implemented in Phase 3):
+
+- **Stock changes only through movements, enforced by the database.** A `BEFORE INSERT` trigger on `stock_movements` (`apply_stock_movement`, `SECURITY DEFINER`) creates the `stock_levels` row at 0 if needed, locks it, refuses to go below zero (`insufficient_stock`), applies the delta and sets `quantity_after`. `app_user` has **no** `INSERT`, `UPDATE` or `DELETE` on `stock_levels`, and no `UPDATE` or `DELETE` on `stock_movements` (append-only), so no application bug can make the level disagree with the movements.
+- **Invariant:** for each `(branch, product)`, `stock_levels.quantity` equals the sum of `stock_movements.quantity_delta`. The integration tests run the reconciliation query (`HAVING quantity <> SUM(quantity_delta)` must return no rows), including after concurrent changes.
+- **Locking:** because `app_user` cannot write `stock_levels`, it also cannot `SELECT … FOR UPDATE` them (Postgres requires `UPDATE` privilege for row locks). Code that checks stock before changing it locks the **product** rows with `FOR NO KEY UPDATE` (in product-id order when there are several), then reads the levels. The trigger locks the level row as well and stays the authority. Phase 4 sales use the same pattern.
+- **Movement rules (CHECK constraints):** `quantity_delta <> 0`; `opening`, `purchase`, `sale_void` and `return` add stock; `sale` removes it; `adjustment` goes either way and needs a `reason` of at least 3 characters.
+- **Unit lock:** a `BEFORE UPDATE OF unit` trigger (`prevent_unit_change_after_movements`) raises `product_unit_locked` once any movement exists. The API checks first and answers 409 `UNIT_LOCKED`.
+- **Composite foreign keys:** `products (tenant_id, category_id)`, `stock_levels` and `stock_movements (tenant_id, branch_id)` and `(tenant_id, product_id)` reference the parent's `(tenant_id, id)`, so nothing can point at another shop's rows.
+- **SKU and archiving:** SKUs are stored uppercase (`CHECK`), so uniqueness is case-insensitive. Products are archived (`archived_at`), never deleted (`DELETE` revoked); archived products are hidden from lists by default and their stock cannot change.
+- **Branches in the MVP:** stock is kept per branch, but the API always uses the shop's default branch, since branches are hidden in the UI (decision 5).
+- **Movement types used so far:** stock in is recorded as `purchase`; corrections as `adjustment`. `opening`, `sale`, `sale_void` and `return` exist for later phases.
+- **Low stock:** a product is low when its stock at the default branch is at or below `low_stock_threshold` (no threshold, no alert). Alerts are in-app (a filter, a banner and a home-page notice); notifications are Phase 6.
 
 ### Phase 4: POS and sales
 

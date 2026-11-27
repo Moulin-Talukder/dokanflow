@@ -2,6 +2,7 @@ import { type DynamicModule, Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 import { AuthModule } from './auth/auth.module.js';
+import { CatalogModule } from './catalog/catalog.module.js';
 import { ApiExceptionFilter } from './common/api-exception.filter.js';
 import { resolveRequestId } from './common/request-id.js';
 import { AppConfigModule } from './config/config.module.js';
@@ -41,6 +42,7 @@ export class AppModule {
         HealthModule,
         TenantsModule,
         StaffModule,
+        CatalogModule,
       ],
       providers: [{ provide: APP_FILTER, useClass: ApiExceptionFilter }],
     };

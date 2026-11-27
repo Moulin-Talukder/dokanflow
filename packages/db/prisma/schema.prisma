@@ -68,11 +68,12 @@ model User {
   createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  managedByTenant Tenant?        @relation("ManagedUsers", fields: [managedByTenantId], references: [id], onDelete: Restrict)
-  lastTenant      Tenant?        @relation("LastTenant", fields: [lastTenantId], references: [id], onDelete: SetNull)
+  managedByTenant Tenant?         @relation("ManagedUsers", fields: [managedByTenantId], references: [id], onDelete: Restrict)
+  lastTenant      Tenant?         @relation("LastTenant", fields: [lastTenantId], references: [id], onDelete: SetNull)
   memberships     Membership[]
   refreshTokens   RefreshToken[]
   sessions        AuthSession[]
+  stockMovements  StockMovement[]
 
   @@map("users")
 }
@@ -91,6 +92,8 @@ model Tenant {
   refreshTokens RefreshToken[]
   managedUsers  User[]         @relation("ManagedUsers")
   lastUsers     User[]         @relation("LastTenant")
+  categories    Category[]
+  products      Product[]
 
   @@map("tenants")
 }
@@ -108,7 +111,9 @@ model Branch {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  stockLevels    StockLevel[]
+  stockMovements StockMovement[]
 
   /// Target for composite (tenant_id, branch_id) foreign keys from later tables.
   @@unique([tenantId, id])
@@ -177,4 +182,122 @@ model RefreshToken {
   @@index([sessionId])
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: products and inventory
+// Triggers, CHECK constraints and privileges live in the migration SQL; see
+// docs/SCHEMA.md. Stock levels change only through stock_movements.
+// ---------------------------------------------------------------------------
+
+enum ProductUnit {
+  piece
+  gram
+  ml
+
+  @@map("product_unit")
+}
+
+enum StockMovementType {
+  opening
+  purchase
+  adjustment
+  sale
+  sale_void
+  return
+
+  @@map("stock_movement_type")
+}
+
+/// Tenant-scoped (RLS).
+model Category {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  products Product[]
+
+  @@unique([tenantId, name])
+  /// Target for composite (tenant_id, category_id) foreign keys.
+  @@unique([tenantId, id])
+  @@map("categories")
+}
+
+/// Tenant-scoped (RLS). Money in poisha; quantities in base units of `unit`.
+model Product {
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String      @map("tenant_id") @db.Uuid
+  categoryId        String?     @map("category_id") @db.Uuid
+  name              String
+  /// Uppercase; unique per tenant.
+  sku               String
+  barcode           String?
+  /// Locked (trigger) once the product has any stock movement.
+  unit              ProductUnit
+  /// Shelf price including VAT, per piece / kg / litre.
+  pricePoisha       Int         @map("price_poisha")
+  costPoisha        Int         @map("cost_poisha")
+  vatRateBp         Int?        @map("vat_rate_bp")
+  /// Base units; at or below this the product is low on stock.
+  lowStockThreshold Int?        @map("low_stock_threshold")
+  archivedAt        DateTime?   @map("archived_at") @db.Timestamptz(3)
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  /// Composite: a product can only use a category of its own tenant.
+  category       Category?       @relation(fields: [tenantId, categoryId], references: [tenantId, id], onDelete: Restrict)
+  stockLevels    StockLevel[]
+  stockMovements StockMovement[]
+
+  @@unique([tenantId, sku])
+  @@unique([tenantId, barcode])
+  /// Target for composite (tenant_id, product_id) foreign keys.
+  @@unique([tenantId, id])
+  @@index([tenantId, name])
+  @@map("products")
+}
+
+/// Tenant-scoped (RLS). Read-only for app_user: written only by the
+/// stock_movements trigger, so it always equals the sum of the movements.
+model StockLevel {
+  tenantId  String   @map("tenant_id") @db.Uuid
+  branchId  String   @map("branch_id") @db.Uuid
+  productId String   @map("product_id") @db.Uuid
+  quantity  Int
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  branch  Branch  @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@id([tenantId, branchId, productId])
+  @@map("stock_levels")
+}
+
+/// Tenant-scoped (RLS). Append-only: app_user may insert but never update or delete.
+/// A BEFORE INSERT trigger applies the delta to stock_levels and sets quantity_after.
+model StockMovement {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String            @map("tenant_id") @db.Uuid
+  branchId      String            @map("branch_id") @db.Uuid
+  productId     String            @map("product_id") @db.Uuid
+  type          StockMovementType
+  quantityDelta Int               @map("quantity_delta")
+  /// Set by the trigger; any value supplied on insert is overwritten.
+  quantityAfter Int               @default(0) @map("quantity_after")
+  reason        String?
+  referenceType String?           @map("reference_type")
+  referenceId   String?           @map("reference_id") @db.Uuid
+  actorUserId   String            @map("actor_user_id") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  branch  Branch  @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  actor   User    @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, productId, createdAt(sort: Desc)])
+  @@map("stock_movements")
 }

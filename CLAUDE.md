@@ -50,6 +50,14 @@ Multi-tenant POS and inventory SaaS for small Bangladeshi retail businesses (dok
 - **Password hashing** goes through the `PasswordHasher` service (concurrency-capped), never the raw functions.
 - **Rate-limited endpoints** use `@UseGuards(RateLimitGuard)` with `@RateLimit('<policy>')` from `RATE_LIMIT_POLICIES`. Login and register also require the CSRF header.
 
+### Code conventions established in Phase 3
+
+- **Stock only changes by inserting `stock_movements`.** The database trigger applies it to `stock_levels` (read-only for `app_user`) and refuses negative stock. Before inserting, lock the product row (`FOR NO KEY UPDATE`) and pre-check with `applyStockDelta` from `@dokanflow/shared` for a clean 409; map trigger errors with `mapInventoryDbError`.
+- **Money and quantities cross the API as integers** (poisha, basis points, base units). Convert user input only with the shared helpers (`parseTakaToPoisha`, `parsePercentToBasisPoints`, `parseDisplayQuantity`) and display with `formatPoisha` / `formatDisplayQuantity`. Never use floats.
+- **Stock is per branch, but the API uses the shop's default branch** (`defaultBranchId`) until branch management exists.
+- **List endpoints** return `{ items, page, pageSize, total }` (`paginatedSchema`), with `pageSize` capped at `PAGE_SIZE_MAX`.
+- **Web catalogue queries** use keys from `catalogKey(tenantId, ...)`, so switching shops never shows another shop's cached data.
+
 ## Core rules (non-negotiable)
 
 1. **Strict TypeScript.** `strict: true` everywhere, no `any`. Use `unknown` and narrow it.
@@ -105,12 +113,11 @@ apps/web (Next.js) ──HTTPS/JSON──▶ apps/api (NestJS) ──▶ Postgre
 - `products` (SKU, barcode, price in poisha), `stock_levels` (current quantity per product), and `stock_movements`, which is append-only and records type, quantity delta, reference and actor.
 - Sale flow, all in one transaction:
   1. Check the idempotency key; if it was already used, return the stored result.
-  2. Lock the involved `stock_levels` rows with `SELECT … FOR UPDATE`, ordered by product ID to avoid deadlocks.
+  2. Lock the involved **product** rows with `SELECT … FOR NO KEY UPDATE`, ordered by product ID to avoid deadlocks (`app_user` cannot lock `stock_levels`; see docs/SCHEMA.md).
   3. Validate that stock is available.
   4. Insert the sale and its sale items.
-  5. Update the stock levels.
-  6. Insert the stock movements.
-  7. Allocate an invoice number from a per-tenant counter.
+  5. Insert the stock movements; the `stock_movements` trigger updates `stock_levels` (the API never writes them).
+  6. Allocate an invoice number from a per-tenant counter.
 - Concurrency is covered by tests that fire parallel sales against a real Postgres instance.
 
 ### Customers, dues and payments

@@ -64,6 +64,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <strong>{t('app.name')}</strong>
           <nav aria-label="Main">
             {navLink('/app', t('nav.home'))}
+            {can('catalog:read') ? navLink('/app/products', t('nav.products')) : null}
             {can('staff:read') ? navLink('/app/staff', t('nav.staff')) : null}
           </nav>
           <div className="app-header-end">

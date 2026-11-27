@@ -1,17 +1,23 @@
+import type { ApiErrorCode } from '@dokanflow/shared';
 import type { MessageKey } from '@/i18n/messages/en';
 import type { TranslateFn } from '@/i18n/translate';
 import { ApiRequestError } from './api-error';
 
 /**
- * A user-facing message for a failed request. `byStatus` maps specific statuses
- * to page-specific messages (e.g. 409 on registration).
+ * A user-facing message for a failed request. `byCode` maps API error codes (e.g.
+ * INSUFFICIENT_STOCK) and `byStatus` maps statuses to page-specific messages;
+ * codes win, because several errors share a status (409).
  */
 export function errorMessage(
   error: unknown,
   t: TranslateFn,
   byStatus: Partial<Record<number, MessageKey>> = {},
+  byCode: Partial<Record<ApiErrorCode, MessageKey>> = {},
 ): string {
   if (error instanceof ApiRequestError) {
+    const code = error.body?.error.code;
+    const byErrorCode = code ? byCode[code] : undefined;
+    if (byErrorCode) return t(byErrorCode);
     const specific = byStatus[error.status];
     if (specific) return t(specific);
     if (error.status === 401) return t('error.sessionExpired');

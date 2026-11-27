@@ -10,6 +10,10 @@ export const apiErrorCodeSchema = z.enum([
   'PASSWORD_CHANGE_REQUIRED',
   'NOT_FOUND',
   'CONFLICT',
+  /** A stock change would take the quantity below zero. */
+  'INSUFFICIENT_STOCK',
+  /** The product's unit cannot change after stock has moved. */
+  'UNIT_LOCKED',
   'TOO_MANY_REQUESTS',
   'SERVICE_UNAVAILABLE',
   'INTERNAL_ERROR',

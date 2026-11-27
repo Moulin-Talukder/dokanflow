@@ -14,6 +14,7 @@ import { useT } from '@/i18n/i18n';
 import { translateMessage } from '@/i18n/translate';
 import { useAuth } from '@/lib/auth/auth-provider';
 import { errorMessage } from '@/lib/error-message';
+import { useProducts } from '@/components/catalog/use-catalog';
 
 export function HomeView() {
   const t = useT();
@@ -59,6 +60,8 @@ export function HomeView() {
         ) : null}
       </section>
 
+      {can('stock:read') ? <LowStockAlert /> : null}
+
       <section className="card stack">
         <h2>{t('home.newBusiness.title')}</h2>
         <p className="muted">{t('home.newBusiness.hint')}</p>
@@ -77,5 +80,22 @@ export function HomeView() {
         </form>
       </section>
     </div>
+  );
+}
+
+/** Low-stock alert for the home page; hidden when nothing is low. */
+function LowStockAlert() {
+  const t = useT();
+  const low = useProducts({ lowStock: 'true', pageSize: 1 });
+  const count = low.data?.total ?? 0;
+  if (count === 0) return null;
+  return (
+    <section className="alert stack" role="status">
+      <strong>{t('home.lowStock.title')}</strong>
+      <p>
+        {count === 1 ? t('products.lowStockAlertOne') : t('products.lowStockAlert', { count })}{' '}
+        <Link href="/app/products?lowStock=true">{t('products.viewLowStock')}</Link>
+      </p>
+    </section>
   );
 }

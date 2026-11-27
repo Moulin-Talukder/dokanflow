@@ -5,12 +5,22 @@ export { Prisma, PrismaClient } from './generated/prisma/client.js';
 export type {
   AuthSession,
   Branch,
+  Category,
   Membership,
+  Product,
   RefreshToken,
+  StockLevel,
+  StockMovement,
   Tenant,
   User,
 } from './generated/prisma/client.js';
-export { MembershipRole, TenantStatus, UserStatus } from './generated/prisma/enums.js';
+export {
+  MembershipRole,
+  ProductUnit,
+  StockMovementType,
+  TenantStatus,
+  UserStatus,
+} from './generated/prisma/enums.js';
 export {
   InvalidDbContextError,
   withDbContext,

@@ -5,3 +5,7 @@ export * from './auth/schemas.js';
 export * from './auth/validation-messages.js';
 export * from './schemas/api-error.js';
 export * from './schemas/health.js';
+export * from './inventory/schemas.js';
+export * from './inventory/stock.js';
+export * from './inventory/units.js';
+export * from './money/money.js';

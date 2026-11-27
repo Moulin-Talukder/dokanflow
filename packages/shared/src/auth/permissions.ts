@@ -10,13 +10,35 @@ export const PERMISSIONS = [
   'staff:read',
   'staff:create',
   'staff:reset-password',
+  'catalog:read',
+  'catalog:write',
+  'stock:read',
+  'stock:write',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
 export const ROLE_PERMISSIONS: Readonly<Record<MembershipRole, readonly Permission[]>> = {
-  owner: ['tenant:read', 'staff:read', 'staff:create', 'staff:reset-password'],
-  manager: ['tenant:read', 'staff:read'],
-  cashier: ['tenant:read'],
+  owner: [
+    'tenant:read',
+    'staff:read',
+    'staff:create',
+    'staff:reset-password',
+    'catalog:read',
+    'catalog:write',
+    'stock:read',
+    'stock:write',
+  ],
+  // Stock changes are "manager and above" (docs/ROADMAP.md, Phase 3).
+  manager: [
+    'tenant:read',
+    'staff:read',
+    'catalog:read',
+    'catalog:write',
+    'stock:read',
+    'stock:write',
+  ],
+  // Cashiers read products and stock (the POS needs them) but change nothing.
+  cashier: ['tenant:read', 'catalog:read', 'stock:read'],
 };
 
 export function permissionsFor(role: MembershipRole): readonly Permission[] {

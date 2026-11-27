@@ -274,3 +274,116 @@ td {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* --- Catalogue and stock (Phase 3) --- */
+
+:root {
+  --warning-bg: #fff4e0;
+  --warning-fg: #7a4a00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --warning-bg: #3a2a10;
+    --warning-fg: #fcd38a;
+  }
+}
+
+.space-between {
+  justify-content: space-between;
+}
+
+.align-start {
+  align-items: start;
+}
+
+.grid-2 {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 1rem;
+}
+
+.filters .field {
+  min-width: 14rem;
+  flex: 1;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-bottom: 0.6rem;
+}
+
+.alert {
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.5rem;
+  background: var(--warning-bg);
+  color: var(--warning-fg);
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--border);
+  color: var(--fg);
+  vertical-align: middle;
+}
+
+.badge-warning {
+  background: var(--warning-bg);
+  color: var(--warning-fg);
+}
+
+.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stock-figure {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.static-value {
+  margin: 0;
+  padding: 0.55rem 0;
+}
+
+.narrow-wide {
+  max-width: 44rem;
+}
+
+.list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.pagination {
+  justify-content: center;
+}
+
+.button-link:disabled {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+}

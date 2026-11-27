@@ -9,6 +9,10 @@ describe('role permissions', () => {
     'staff:read': { owner: true, manager: true, cashier: false },
     'staff:create': { owner: true, manager: false, cashier: false },
     'staff:reset-password': { owner: true, manager: false, cashier: false },
+    'catalog:read': { owner: true, manager: true, cashier: true },
+    'catalog:write': { owner: true, manager: true, cashier: false },
+    'stock:read': { owner: true, manager: true, cashier: true },
+    'stock:write': { owner: true, manager: true, cashier: false },
   } as const;
 
   it('covers every permission in the expected matrix', () => {
